@@ -1,0 +1,874 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>LABCORE — Laboratory Data System</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Archivo:wght@400;500;600;700;800;900&display=swap');
+
+  :root{
+    --bg:#0d0f12;
+    --panel:#15181d;
+    --panel2:#1c2027;
+    --line:#2a2f38;
+    --ink:#e8eaed;
+    --mute:#8a909b;
+    --acc:#d4ff3f;       /* laser green-yellow */
+    --acc2:#3fb6ff;      /* chemical blue */
+    --warn:#ff5c5c;
+    --r:6px;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{
+    background:var(--bg);
+    color:var(--ink);
+    font-family:'Archivo',sans-serif;
+    min-height:100vh;
+    background-image:
+      radial-gradient(circle at 12% 8%, rgba(212,255,63,.05), transparent 30%),
+      radial-gradient(circle at 88% 92%, rgba(63,182,255,.05), transparent 30%);
+  }
+  .mono{font-family:'Space Mono',monospace}
+  button{font-family:inherit;cursor:pointer;border:none}
+  input,select,textarea{font-family:inherit}
+
+  /* TOP BAR */
+  header{
+    display:flex;align-items:center;justify-content:space-between;
+    padding:14px 26px;border-bottom:1px solid var(--line);
+    background:rgba(13,15,18,.85);backdrop-filter:blur(8px);
+    position:sticky;top:0;z-index:50;
+  }
+  .logo{display:flex;align-items:center;gap:12px}
+  .logo .mark{
+    width:34px;height:34px;border:2px solid var(--acc);border-radius:4px;
+    display:grid;place-items:center;font-weight:900;color:var(--acc);
+    box-shadow:0 0 14px rgba(212,255,63,.25);
+  }
+  .logo h1{font-size:18px;font-weight:900;letter-spacing:2px}
+  .logo span{color:var(--mute);font-size:11px;letter-spacing:3px;display:block}
+  .userbox{display:flex;align-items:center;gap:14px;font-size:13px}
+  .pill{
+    padding:7px 16px;border-radius:var(--r);font-weight:700;font-size:13px;
+    letter-spacing:.5px;transition:.15s;
+  }
+  .pill.go{background:var(--acc);color:#0d0f12}
+  .pill.go:hover{box-shadow:0 0 16px rgba(212,255,63,.45)}
+  .pill.ghost{background:transparent;border:1px solid var(--line);color:var(--mute)}
+  .pill.ghost:hover{border-color:var(--mute);color:var(--ink)}
+
+  /* LAYOUT */
+  .wrap{display:flex;min-height:calc(100vh - 63px)}
+  aside{
+    width:300px;border-right:1px solid var(--line);padding:20px;
+    background:var(--panel);flex-shrink:0;overflow-y:auto;
+    max-height:calc(100vh - 63px);position:sticky;top:63px;
+  }
+  main{flex:1;padding:30px 36px;overflow-y:auto}
+
+  .sec-label{font-size:11px;letter-spacing:2px;color:var(--mute);font-weight:700;margin-bottom:12px;text-transform:uppercase}
+
+  .pjlist{display:flex;flex-direction:column;gap:6px;margin-top:6px}
+  .pjitem{
+    padding:12px 14px;border:1px solid var(--line);border-radius:var(--r);
+    background:var(--panel2);transition:.12s;position:relative;overflow:hidden;
+  }
+  .pjitem:hover{border-color:var(--acc);transform:translateX(2px)}
+  .pjitem.sel{border-color:var(--acc);background:#1f2410}
+  .pjitem.sel::before{content:'';position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--acc)}
+  .pjitem h4{font-size:14px;font-weight:700;margin-bottom:3px}
+  .pjitem .meta{font-size:11px;color:var(--mute)}
+  .status-dot{display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:6px}
+  .st-active{background:var(--acc)}
+  .st-done{background:var(--acc2)}
+  .st-archived{background:var(--mute)}
+
+  /* EMPTY / LOGIN STATES */
+  .center-state{display:grid;place-items:center;min-height:60vh;text-align:center}
+  .center-state .big{font-size:48px;font-weight:900;letter-spacing:-1px;margin-bottom:10px}
+  .center-state p{color:var(--mute);max-width:420px;margin:0 auto 22px;line-height:1.6}
+
+  /* CARDS / PANELS */
+  .grid{display:grid;gap:20px}
+  .panelbox{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:22px}
+  .panelbox h3{font-size:13px;letter-spacing:1.5px;text-transform:uppercase;margin-bottom:16px;display:flex;align-items:center;gap:8px}
+  .tag{font-size:10px;padding:2px 8px;border-radius:20px;font-weight:700;letter-spacing:.5px}
+  .tag.laser{background:rgba(212,255,63,.15);color:var(--acc)}
+  .tag.chem{background:rgba(63,182,255,.15);color:var(--acc2)}
+  .tag.file{background:rgba(255,255,255,.08);color:var(--ink)}
+
+  .row{display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px dashed var(--line);font-size:14px}
+  .row:last-child{border:none}
+  .row .k{color:var(--mute)}
+  .row .v{font-weight:600}
+
+  /* FORMS */
+  label{display:block;font-size:11px;letter-spacing:1px;color:var(--mute);margin:0 0 6px;text-transform:uppercase}
+  .field{margin-bottom:14px}
+  input,select,textarea{
+    width:100%;padding:11px 13px;background:var(--bg);border:1px solid var(--line);
+    border-radius:var(--r);color:var(--ink);font-size:14px;transition:.12s;
+  }
+  input:focus,select:focus,textarea:focus{outline:none;border-color:var(--acc)}
+  .two{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+  .three{display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px}
+
+  .btn{padding:12px 22px;border-radius:var(--r);font-weight:700;letter-spacing:.5px;font-size:13px;transition:.15s}
+  .btn-acc{background:var(--acc);color:#0d0f12}
+  .btn-acc:hover{box-shadow:0 0 16px rgba(212,255,63,.4)}
+  .btn-blue{background:var(--acc2);color:#06121c}
+  .btn-blue:hover{box-shadow:0 0 16px rgba(63,182,255,.4)}
+  .btn-out{background:transparent;border:1px solid var(--line);color:var(--ink)}
+  .btn-out:hover{border-color:var(--ink)}
+
+  /* SAMPLES */
+  .sample-card{border:1px solid var(--line);border-radius:8px;margin-bottom:16px;overflow:hidden;background:var(--panel)}
+  .sample-head{padding:14px 18px;background:var(--panel2);display:flex;justify-content:space-between;align-items:center;cursor:pointer}
+  .sample-head h4{font-size:15px}
+  .sample-head .sub{font-size:12px;color:var(--mute);margin-top:2px}
+  .sample-body{padding:18px;display:none;border-top:1px solid var(--line)}
+  .sample-body.open{display:block}
+  .subgrid{display:grid;grid-template-columns:1fr 1fr;gap:18px}
+  @media(max-width:820px){.subgrid{grid-template-columns:1fr}}
+
+  /* FILE GALLERY */
+  .gallery{display:grid;grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:10px;margin-top:10px}
+  .fcard{border:1px solid var(--line);border-radius:var(--r);overflow:hidden;background:var(--bg);font-size:11px}
+  .fcard img{width:100%;height:90px;object-fit:cover;display:block;background:#000}
+  .fcard .fmeta{padding:7px 9px}
+  .fcard .ftype{font-weight:700;font-size:9px;letter-spacing:1px;color:var(--mute)}
+  .fcard a{color:var(--acc2);text-decoration:none;word-break:break-all}
+
+  .toast{position:fixed;bottom:24px;right:24px;background:var(--panel2);border:1px solid var(--acc);color:var(--ink);padding:14px 20px;border-radius:var(--r);z-index:200;font-size:13px;box-shadow:0 10px 40px rgba(0,0,0,.5);max-width:340px;display:none}
+  .toast.err{border-color:var(--warn)}
+  .toast.show{display:block;animation:pop .3s}
+  @keyframes pop{from{opacity:0;transform:translateY(10px)}to{opacity:1}}
+
+  .loader{display:inline-block;width:14px;height:14px;border:2px solid var(--line);border-top-color:var(--acc);border-radius:50%;animation:spin .7s linear infinite;vertical-align:middle}
+  @keyframes spin{to{transform:rotate(360deg)}}
+
+  .config-warn{background:#2a1a0a;border:1px solid #ff9c3f;color:#ffce9c;padding:14px 18px;border-radius:var(--r);font-size:13px;margin:16px 0;line-height:1.5}
+  .config-warn code{background:#0d0f12;padding:2px 6px;border-radius:3px;color:var(--acc)}
+
+  .crumb{font-size:12px;color:var(--mute);margin-bottom:8px;letter-spacing:1px}
+  .crumb b{color:var(--acc)}
+  .toolbar{display:flex;justify-content:space-between;align-items:center;margin-bottom:24px;flex-wrap:wrap;gap:12px}
+  .toolbar h2{font-size:26px;font-weight:900;letter-spacing:-.5px}
+  .empty-note{color:var(--mute);font-size:13px;padding:20px;text-align:center;border:1px dashed var(--line);border-radius:var(--r)}
+  details summary{cursor:pointer;color:var(--mute);font-size:12px;margin-top:8px}
+
+  /* priority badge */
+  .prio{font-size:11px;font-weight:800;letter-spacing:1px;padding:3px 10px;border-radius:20px;vertical-align:middle;margin-left:8px;text-transform:uppercase}
+  .prio-low{background:rgba(138,144,155,.2);color:var(--mute)}
+  .prio-medium{background:rgba(63,182,255,.18);color:var(--acc2)}
+  .prio-high{background:rgba(212,255,63,.18);color:var(--acc)}
+  .prio-urgent{background:rgba(255,92,92,.2);color:var(--warn)}
+  .prio-mini{font-size:9px;padding:1px 7px;margin-left:0}
+
+  /* task checklist */
+  .tasklist{display:flex;flex-direction:column;gap:6px}
+  .taskrow{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:9px 12px;background:var(--bg);border:1px solid var(--line);border-radius:var(--r);font-size:14px}
+  .taskdel{background:transparent;color:var(--mute);font-size:12px;padding:2px 6px;border-radius:4px}
+  .taskdel:hover{color:var(--warn)}
+  input[type=checkbox]{accent-color:var(--acc)}
+
+  .filelink{display:inline-block;color:var(--acc2);text-decoration:none;font-weight:600;font-size:14px;padding:8px 0;word-break:break-all}
+  .filelink:hover{text-decoration:underline}
+
+  .valunit{display:flex;gap:8px}
+  .valunit input{flex:1}
+  .valunit select{width:88px;flex-shrink:0}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="logo">
+    <div class="mark">L</div>
+    <div>
+      <h1>LABCORE</h1>
+      <span class="mono">DATA / PROJECT SYSTEM</span>
+    </div>
+  </div>
+  <div class="userbox">
+    <span id="userEmail" class="mono" style="color:var(--mute)"></span>
+    <button id="authBtn" class="pill go">Connect Google Drive</button>
+  </div>
+</header>
+
+<div class="wrap">
+  <aside>
+    <div class="sec-label">Projects</div>
+    <button id="newProjectBtn" class="btn btn-acc" style="width:100%;margin-bottom:14px;display:none">+ New Project</button>
+    <div id="projectList" class="pjlist">
+      <div class="empty-note">Connect Drive to load projects.</div>
+    </div>
+  </aside>
+
+  <main id="mainView">
+    <!-- LOGIN STATE -->
+    <div class="center-state" id="loginState">
+      <div>
+        <div class="big">Unified lab data,<br>one Drive.</div>
+        <p>Projects, samples, laser & chemical parameters, photos, drawings and reports — all stored in your Google Drive, managed from one interface. No other server involved.</p>
+        <button class="pill go" onclick="document.getElementById('authBtn').click()">Connect Google Drive →</button>
+        <div id="configWarn"></div>
+      </div>
+    </div>
+  </main>
+</div>
+
+<div id="toast" class="toast"></div>
+
+<!-- Google APIs -->
+<script src="https://apis.google.com/js/api.js"></script>
+<script src="https://accounts.google.com/gsi/client"></script>
+<!-- SheetJS for Excel generation -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+
+<script>
+/* ============================================================
+   CONFIG  —  EDIT THESE TWO VALUES (see instructions below)
+   ============================================================ */
+const CLIENT_ID = '37123387397-g5k9795fvsfi0dltsd1lqq8fc3bojtm1.apps.googleusercontent.com';
+const API_KEY   = 'AIzaSyCkMyUEfhT507soedXVuzT7_hzRQdEyVNs';
+/* ============================================================ */
+
+const SCOPES = 'https://www.googleapis.com/auth/drive';
+const APP_FOLDER = 'LABCORE_DATA';     // root folder created in your Drive
+let tokenClient, gapiReady=false, gisReady=false, accessToken=null;
+let rootFolderId=null;
+let projects=[];           // {id(driveFileId), folderId, data:{...}}
+let selectedProjectIndex=-1;
+
+/* ---------- UI helpers ---------- */
+function toast(msg,isErr){
+  const t=document.getElementById('toast');
+  t.textContent=msg; t.className='toast show'+(isErr?' err':'');
+  setTimeout(()=>t.className='toast',3500);
+}
+function configMissing(){
+  return CLIENT_ID.startsWith('PASTE_') || API_KEY.startsWith('PASTE_');
+}
+function showConfigWarn(){
+  document.getElementById('configWarn').innerHTML=
+   `<div class="config-warn">⚠ Not configured yet. Open this file in a text editor and set
+    <code>CLIENT_ID</code> and <code>API_KEY</code> near the top of the script.
+    Full setup steps are in the companion README.</div>`;
+}
+
+/* ---------- Google init ---------- */
+function gapiInit(){
+  gapi.load('client',async()=>{
+    await gapi.client.init({apiKey:API_KEY,discoveryDocs:['https://www.googleapis.com/discovery/v1/apis/drive/v3/rest']});
+    gapiReady=true;
+  });
+}
+function gisInit(){
+  tokenClient=google.accounts.oauth2.initTokenClient({
+    client_id:CLIENT_ID, scope:SCOPES,
+    callback:async(resp)=>{
+      if(resp.error){toast('Auth failed: '+resp.error,true);return;}
+      accessToken=resp.access_token;
+      gapi.client.setToken({access_token:accessToken});
+      await onConnected();
+    }
+  });
+  gisReady=true;
+}
+window.onload=()=>{
+  if(configMissing()){showConfigWarn();return;}
+  gapiInit(); gisInit();
+};
+
+document.getElementById('authBtn').onclick=()=>{
+  if(configMissing()){showConfigWarn();toast('Set CLIENT_ID and API_KEY first',true);return;}
+  if(!gapiReady||!gisReady){toast('Google libraries still loading…',true);return;}
+  if(accessToken){ // disconnect
+    google.accounts.oauth2.revoke(accessToken,()=>{});
+    accessToken=null; location.reload(); return;
+  }
+  tokenClient.requestAccessToken({prompt:'consent'});
+};
+
+async function onConnected(){
+  document.getElementById('authBtn').textContent='Disconnect';
+  document.getElementById('authBtn').className='pill ghost';
+  document.getElementById('newProjectBtn').style.display='block';
+  document.getElementById('loginState').style.display='none';
+  try{
+    const info=await gapi.client.request({path:'https://www.googleapis.com/oauth2/v2/userinfo'});
+    document.getElementById('userEmail').textContent=info.result.email||'';
+  }catch(e){}
+  await ensureRootFolder();
+  await loadProjects();
+}
+
+/* ---------- Drive: folder + file helpers ---------- */
+async function ensureRootFolder(){
+  const q=`name='${APP_FOLDER}' and mimeType='application/vnd.google-apps.folder' and trashed=false`;
+  const r=await gapi.client.drive.files.list({
+    q,fields:'files(id,name,ownedByMe,shared)',pageSize:50});
+  const found=r.result.files||[];
+  if(found.length){
+    // prefer a folder shared with us (i.e. the team's central folder) over our own
+    const shared=found.find(f=>f.ownedByMe===false);
+    rootFolderId=(shared||found[0]).id;
+    return;
+  }
+  // none found — create one (this becomes the owner's central folder to be shared)
+  const c=await gapi.client.drive.files.create({
+    resource:{name:APP_FOLDER,mimeType:'application/vnd.google-apps.folder'},fields:'id'});
+  rootFolderId=c.result.id;
+  toast('Created LABCORE_DATA — remember to Share it with your team');
+}
+async function createFolder(name,parentId){
+  const c=await gapi.client.drive.files.create({
+    resource:{name,mimeType:'application/vnd.google-apps.folder',parents:[parentId]},fields:'id'});
+  return c.result.id;
+}
+/* write/update a JSON file via multipart upload */
+async function writeJson(name,parentId,obj,existingId){
+  const boundary='-------labcore'+Date.now();
+  const meta=existingId?{}:{name,parents:[parentId],mimeType:'application/json'};
+  const body=
+    `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n`+
+    JSON.stringify(meta)+
+    `\r\n--${boundary}\r\nContent-Type: application/json\r\n\r\n`+
+    JSON.stringify(obj,null,2)+
+    `\r\n--${boundary}--`;
+  const path=existingId?`/upload/drive/v3/files/${existingId}`:'/upload/drive/v3/files';
+  const r=await gapi.client.request({
+    path,method:existingId?'PATCH':'POST',
+    params:{uploadType:'multipart'},
+    headers:{'Content-Type':`multipart/related; boundary=${boundary}`},
+    body});
+  return r.result.id;
+}
+async function readJson(fileId){
+  const r=await gapi.client.drive.files.get({fileId,alt:'media'});
+  return typeof r.result==='string'?JSON.parse(r.result):r.result;
+}
+/* upload a binary File object */
+async function uploadFile(file,parentId){
+  const meta={name:file.name,parents:[parentId]};
+  const reader=await file.arrayBuffer();
+  const boundary='-------labfile'+Date.now()+Math.random().toString(36).slice(2);
+  const head=`--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n`+JSON.stringify(meta)+`\r\n--${boundary}\r\nContent-Type: ${file.type||'application/octet-stream'}\r\n\r\n`;
+  const tail=`\r\n--${boundary}--`;
+  const blob=new Blob([head,reader,tail]);
+  const resp=await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name,webViewLink,thumbnailLink',{
+    method:'POST',
+    headers:{Authorization:'Bearer '+accessToken,'Content-Type':`multipart/related; boundary=${boundary}`},
+    body:blob});
+  if(!resp.ok){throw new Error('Drive upload failed ('+resp.status+'): '+(await resp.text()).slice(0,160));}
+  return await resp.json();
+}
+/* upload raw bytes (Blob) as a named file, optionally overwriting existing id */
+async function uploadBlob(name,parentId,blob,mime,existingId){
+  const meta=existingId?{}:{name,parents:[parentId]};
+  const boundary='-------labblob'+Date.now()+Math.random().toString(36).slice(2);
+  const head=`--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n`+JSON.stringify(meta)+`\r\n--${boundary}\r\nContent-Type: ${mime}\r\n\r\n`;
+  const tail=`\r\n--${boundary}--`;
+  const body=new Blob([head,blob,tail]);
+  const path=existingId?`https://www.googleapis.com/upload/drive/v3/files/${existingId}?uploadType=multipart&fields=id,name,webViewLink`
+                       :`https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name,webViewLink`;
+  const resp=await fetch(path,{method:existingId?'PATCH':'POST',
+    headers:{Authorization:'Bearer '+accessToken,'Content-Type':`multipart/related; boundary=${boundary}`},body});
+  if(!resp.ok){throw new Error('Drive upload failed ('+resp.status+'): '+(await resp.text()).slice(0,160));}
+  return await resp.json();
+}
+/* find a subfolder by name under a parent, creating it if missing */
+async function ensureSubfolder(name,parentId){
+  const safe=name.replace(/'/g,"\\'");
+  const r=await gapi.client.drive.files.list({
+    q:`name='${safe}' and mimeType='application/vnd.google-apps.folder' and '${parentId}' in parents and trashed=false`,
+    fields:'files(id)'});
+  if(r.result.files.length)return r.result.files[0].id;
+  return await createFolder(name,parentId);
+}
+/* find a file by exact name under a parent */
+async function findFile(name,parentId){
+  const safe=name.replace(/'/g,"\\'");
+  const r=await gapi.client.drive.files.list({
+    q:`name='${safe}' and '${parentId}' in parents and trashed=false`,fields:'files(id)'});
+  return r.result.files.length?r.result.files[0].id:null;
+}
+/* Build/refresh the per-project parameters .xlsx.
+   Layout: parameters down the ROWS, each sample is a COLUMN.
+   Two sheets: Laser and Chemical. */
+async function writeParamsExcel(p){
+  const samples=p.data.samples;
+  const fmt=(v,u)=>{ if(v===undefined||v===null||v==='')return ''; return u?`${v} ${u}`:`${v}`; };
+
+  // each entry: [Parameter label, getterFn]
+  const laserRows=[
+    ['Wavelength', s=>fmt(s.laser?.wavelength,s.laser?.wavelength_u)],
+    ['Average power', s=>fmt(s.laser?.power,s.laser?.power_u)],
+    ['Pulse energy', s=>fmt(s.laser?.energy,s.laser?.energy_u)],
+    ['Frequency / rep. rate', s=>fmt(s.laser?.frequency,s.laser?.frequency_u)],
+    ['Pulse duration', s=>fmt(s.laser?.pulse,s.laser?.pulse_u)],
+    ['Scan speed', s=>fmt(s.laser?.speed,s.laser?.speed_u)],
+    ['Spot size', s=>fmt(s.laser?.spot,s.laser?.spot_u)],
+    ['Hatch / line spacing', s=>fmt(s.laser?.hatch,s.laser?.hatch_u)],
+    ['Passes / repetitions', s=>fmt(s.laser?.passes)],
+    ['Source / model', s=>fmt(s.laser?.source)],
+    ['Notes', s=>fmt(s.laser?.notes)],
+  ];
+  const chemRows=[
+    ['Solution / electrolyte', s=>fmt(s.chem?.solution)],
+    ['Concentration', s=>fmt(s.chem?.concentration,s.chem?.concentration_u)],
+    ['pH', s=>fmt(s.chem?.ph)],
+    ['Temperature (°C)', s=>fmt(s.chem?.temp)],
+    ['Voltage', s=>fmt(s.chem?.voltage,s.chem?.voltage_u)],
+    ['Current density', s=>fmt(s.chem?.current,s.chem?.current_u)],
+    ['Duration', s=>fmt(s.chem?.duration,s.chem?.duration_u)],
+    ['Process', s=>fmt(s.chem?.process)],
+    ['Notes', s=>fmt(s.chem?.notes)],
+  ];
+
+  const buildSheet=(rows)=>{
+    const header=['Parameter',...(samples.length?samples.map(s=>s.label):['(no samples)'])];
+    const aoa=[header];
+    rows.forEach(([label,get])=>{
+      aoa.push([label,...(samples.length?samples.map(s=>get(s)):[''])]);
+    });
+    const ws=XLSX.utils.aoa_to_sheet(aoa);
+    ws['!cols']=header.map((_,i)=>({wch:i===0?24:18}));
+    return ws;
+  };
+
+  const wb=XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb,buildSheet(laserRows),'Laser');
+  XLSX.utils.book_append_sheet(wb,buildSheet(chemRows),'Chemical');
+  const out=XLSX.write(wb,{bookType:'xlsx',type:'array'});
+  const blob=new Blob([out],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'});
+  const name='parameters.xlsx';
+  const existing=p.data.excelId||await findFile(name,p.folderId);
+  const r=await uploadBlob(name,p.folderId,blob,blob.type,existing);
+  p.data.excelId=r.id; p.data.excelLink=r.webViewLink;
+}
+
+/* ---------- Projects ---------- */
+async function loadProjects(){
+  document.getElementById('projectList').innerHTML='<div class="empty-note"><span class="loader"></span> Loading…</div>';
+  const q=`'${rootFolderId}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false`;
+  const r=await gapi.client.drive.files.list({q,fields:'files(id,name)',orderBy:'createdTime desc'});
+  projects=[];
+  for(const folder of r.result.files){
+    // each project folder contains project.json
+    const jr=await gapi.client.drive.files.list({
+      q:`'${folder.id}' in parents and name='project.json' and trashed=false`,fields:'files(id)'});
+    if(jr.result.files.length){
+      const data=await readJson(jr.result.files[0].id);
+      projects.push({jsonId:jr.result.files[0].id,folderId:folder.id,data});
+    }
+  }
+  renderProjectList();
+}
+function renderProjectList(){
+  const el=document.getElementById('projectList');
+  if(!projects.length){el.innerHTML='<div class="empty-note">No projects yet. Create one →</div>';return;}
+  el.innerHTML='';
+  projects.forEach((p,i)=>{
+    const d=document.createElement('div');
+    d.className='pjitem'+(i===selectedProjectIndex?' sel':'');
+    const st=p.data.status||'active';
+    const prio=p.data.priority||'Medium';
+    d.innerHTML=`<h4>${esc(p.data.name)}</h4>
+      <div class="meta"><span class="status-dot st-${st}"></span>${st} · ${p.data.samples?.length||0} samples <span class="prio prio-${prio.toLowerCase()} prio-mini">${prio}</span></div>`;
+    d.onclick=()=>{selectedProjectIndex=i;renderProjectList();renderProject();};
+    el.appendChild(d);
+  });
+}
+function esc(s){return (s||'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
+
+/* ---------- New project ---------- */
+document.getElementById('newProjectBtn').onclick=()=>{
+  document.getElementById('mainView').innerHTML=`
+   <div class="crumb mono">NEW / PROJECT</div>
+   <div class="toolbar"><h2>Create Project</h2></div>
+   <div class="panelbox" style="max-width:640px">
+     <div class="field"><label>Project name *</label><input id="np_name" placeholder="e.g. Titanium Surface Texturing Batch 12"></div>
+     <div class="two">
+       <div class="field"><label>Status</label>
+         <select id="np_status"><option value="active">Active</option><option value="done">Completed</option><option value="archived">Archived</option></select>
+       </div>
+       <div class="field"><label>Priority</label>
+         <select id="np_priority"><option value="Low">Low</option><option value="Medium" selected>Medium</option><option value="High">High</option><option value="Urgent">Urgent</option></select>
+       </div>
+     </div>
+     <div class="field"><label>Description</label><textarea id="np_desc" rows="2" placeholder="Goal, context, operator…"></textarea></div>
+
+     <div class="field">
+       <label>Tasks to do</label>
+       <div style="display:flex;gap:8px;margin-bottom:8px">
+         <input id="np_taskinput" placeholder="Add a task and press +" style="flex:1" onkeydown="if(event.key==='Enter'){event.preventDefault();addTaskToNew();}">
+         <button class="btn btn-out" type="button" onclick="addTaskToNew()" style="padding:11px 16px">+</button>
+       </div>
+       <div id="np_tasklist" class="tasklist"></div>
+     </div>
+
+     <div class="field">
+       <label>Drawings (uploaded to project folder on create)</label>
+       <input type="file" id="np_drawings" multiple>
+     </div>
+
+     <button class="btn btn-acc" id="np_save">Create Project</button>
+   </div>`;
+  window._newTasks=[];
+  renderNewTasks();
+  document.getElementById('np_save').onclick=async()=>{
+    const name=document.getElementById('np_name').value.trim();
+    if(!name){toast('Name required',true);return;}
+    const btn=document.getElementById('np_save');btn.innerHTML='<span class="loader"></span> Creating…';
+    try{
+      const folderId=await createFolder('PRJ_'+name.replace(/[^\w]+/g,'_').slice(0,40),rootFolderId);
+      const data={name,status:document.getElementById('np_status').value,
+        priority:document.getElementById('np_priority').value,
+        description:document.getElementById('np_desc').value,
+        tasks:(window._newTasks||[]).map(t=>({text:t,done:false})),
+        drawings:[],
+        created:new Date().toISOString(),samples:[]};
+      // upload any drawings into a Drawings subfolder
+      const drawFiles=document.getElementById('np_drawings').files;
+      if(drawFiles.length){
+        const dfolder=await ensureSubfolder('Drawings',folderId);
+        for(const f of drawFiles){
+          const r=await uploadFile(f,dfolder);
+          data.drawings.push({id:r.id,name:r.name,link:r.webViewLink,thumb:r.thumbnailLink});
+        }
+      }
+      const jsonId=await writeJson('project.json',folderId,data);
+      const p={jsonId,folderId,data};
+      await writeParamsExcel(p);                 // create empty parameters.xlsx
+      await writeJson('project.json',folderId,data,jsonId); // save excel id back
+      projects.unshift(p);
+      selectedProjectIndex=0;renderProjectList();renderProject();
+      toast('Project created');
+    }catch(e){toast('Error: '+e.message,true);btn.textContent='Create Project';}
+  };
+};
+function addTaskToNew(){
+  const inp=document.getElementById('np_taskinput');
+  const v=inp.value.trim();if(!v)return;
+  window._newTasks.push(v);inp.value='';renderNewTasks();
+}
+function renderNewTasks(){
+  const el=document.getElementById('np_tasklist');
+  el.innerHTML=(window._newTasks||[]).map((t,i)=>
+    `<div class="taskrow"><span>${esc(t)}</span><button class="taskdel" onclick="window._newTasks.splice(${i},1);renderNewTasks()">✕</button></div>`).join('')
+    ||'<div class="empty-note" style="padding:10px">No tasks added.</div>';
+}
+
+/* ---------- Render single project ---------- */
+function renderProject(){
+  const p=projects[selectedProjectIndex];if(!p)return;
+  const d=p.data;
+  const prio=d.priority||'Medium';
+  document.getElementById('mainView').innerHTML=`
+    <div class="crumb mono">PROJECT / <b>${esc(d.name).toUpperCase()}</b></div>
+    <div class="toolbar">
+      <h2>${esc(d.name)} <span class="prio prio-${prio.toLowerCase()}">${prio}</span></h2>
+      <div style="display:flex;gap:10px;flex-wrap:wrap">
+        <select id="pj_priority" class="btn-out" style="padding:8px 12px;width:auto">
+          ${['Low','Medium','High','Urgent'].map(x=>`<option${prio===x?' selected':''}>${x}</option>`).join('')}
+        </select>
+        <select id="pj_status" class="btn-out" style="padding:8px 12px;width:auto">
+          <option value="active"${d.status==='active'?' selected':''}>Active</option>
+          <option value="done"${d.status==='done'?' selected':''}>Completed</option>
+          <option value="archived"${d.status==='archived'?' selected':''}>Archived</option>
+        </select>
+        <button class="btn btn-acc" id="addSampleBtn">+ Add Sample</button>
+      </div>
+    </div>
+    ${d.description?`<p style="color:var(--mute);max-width:700px;margin-bottom:20px;line-height:1.6">${esc(d.description)}</p>`:''}
+
+    <div class="subgrid" style="margin-bottom:24px">
+      <div class="panelbox">
+        <h3><span class="tag file">TASKS</span> To Do</h3>
+        <div style="display:flex;gap:8px;margin-bottom:10px">
+          <input id="pj_taskinput" placeholder="Add a task…" style="flex:1" onkeydown="if(event.key==='Enter'){event.preventDefault();addProjectTask()}">
+          <button class="btn btn-out" type="button" onclick="addProjectTask()" style="padding:11px 16px">+</button>
+        </div>
+        <div id="pj_tasklist" class="tasklist"></div>
+      </div>
+      <div class="panelbox">
+        <h3><span class="tag laser">DRAWINGS</span> &amp; Spreadsheet</h3>
+        ${d.excelLink?`<a class="filelink" href="${d.excelLink}" target="_blank">📊 parameters.xlsx — open in Drive</a>`:'<div class="empty-note" style="padding:10px">Spreadsheet will appear after first save.</div>'}
+        <div style="display:flex;gap:8px;margin:12px 0 6px">
+          <input type="file" id="pj_drawin" multiple style="flex:1">
+          <button class="btn btn-blue" id="pj_drawup" style="white-space:nowrap">Add</button>
+        </div>
+        <div class="gallery" id="pj_drawgal"></div>
+      </div>
+    </div>
+
+    <div class="sec-label">Samples · ${d.samples.length}</div>
+    <div id="sampleArea"></div>`;
+  document.getElementById('pj_status').onchange=async(e)=>{
+    d.status=e.target.value;await saveProject(p);renderProjectList();toast('Status updated');
+  };
+  document.getElementById('pj_priority').onchange=async(e)=>{
+    d.priority=e.target.value;await saveProject(p);renderProject();renderProjectList();toast('Priority updated');
+  };
+  document.getElementById('addSampleBtn').onclick=()=>openSampleForm(p);
+  document.getElementById('pj_drawup').onclick=()=>uploadDrawings(p);
+  renderProjectTasks(p);
+  renderDrawings(p);
+  renderSamples(p);
+}
+
+function renderProjectTasks(p){
+  const el=document.getElementById('pj_tasklist');
+  const tasks=p.data.tasks||[];
+  if(!tasks.length){el.innerHTML='<div class="empty-note" style="padding:10px">No tasks.</div>';return;}
+  el.innerHTML='';
+  tasks.forEach((t,i)=>{
+    const row=document.createElement('div');row.className='taskrow';
+    row.innerHTML=`<label style="display:flex;align-items:center;gap:9px;margin:0;cursor:pointer;text-transform:none;letter-spacing:0;color:var(--ink);font-size:14px">
+      <input type="checkbox" ${t.done?'checked':''} style="width:auto"> <span style="${t.done?'text-decoration:line-through;color:var(--mute)':''}">${esc(t.text)}</span></label>
+      <button class="taskdel">✕</button>`;
+    row.querySelector('input').onchange=async(e)=>{t.done=e.target.checked;await saveProject(p);renderProjectTasks(p);};
+    row.querySelector('.taskdel').onclick=async()=>{p.data.tasks.splice(i,1);await saveProject(p);renderProjectTasks(p);};
+    el.appendChild(row);
+  });
+}
+async function addProjectTask(){
+  const p=projects[selectedProjectIndex];
+  const inp=document.getElementById('pj_taskinput');const v=inp.value.trim();if(!v)return;
+  p.data.tasks=p.data.tasks||[];p.data.tasks.push({text:v,done:false});inp.value='';
+  await saveProject(p);renderProjectTasks(p);
+}
+function renderDrawings(p){
+  const g=document.getElementById('pj_drawgal');
+  const dr=p.data.drawings||[];
+  if(!dr.length){g.innerHTML='<div class="empty-note" style="grid-column:1/-1;padding:10px">No drawings.</div>';return;}
+  g.innerHTML='';
+  dr.forEach(f=>{
+    const d=document.createElement('div');d.className='fcard';
+    d.innerHTML=`${f.thumb?`<img src="${f.thumb}" referrerpolicy="no-referrer" onerror="this.style.display='none'">`:''}
+      <div class="fmeta"><div class="ftype">DRAWING</div><a href="${f.link}" target="_blank">${esc(f.name)}</a></div>`;
+    g.appendChild(d);
+  });
+}
+async function uploadDrawings(p){
+  const inp=document.getElementById('pj_drawin');
+  if(!inp.files.length){toast('Choose file(s) first',true);return;}
+  const btn=document.getElementById('pj_drawup');btn.innerHTML='<span class="loader"></span>';
+  try{
+    const dfolder=await ensureSubfolder('Drawings',p.folderId);
+    p.data.drawings=p.data.drawings||[];
+    for(const f of inp.files){
+      const r=await uploadFile(f,dfolder);
+      p.data.drawings.push({id:r.id,name:r.name,link:r.webViewLink,thumb:r.thumbnailLink});
+    }
+    await saveProject(p);renderDrawings(p);inp.value='';toast('Drawings added');
+  }catch(e){toast('Error: '+e.message,true);}
+  btn.textContent='Add';
+}
+
+async function saveProject(p){
+  await writeJson('project.json',p.folderId,p.data,p.jsonId);
+}
+
+/* ---------- Samples ---------- */
+function renderSamples(p){
+  const area=document.getElementById('sampleArea');
+  if(!p.data.samples.length){area.innerHTML='<div class="empty-note">No samples yet. Add one to record laser & chemical parameters and upload files.</div>';return;}
+  area.innerHTML='';
+  p.data.samples.forEach((s,si)=>{
+    const card=document.createElement('div');card.className='sample-card';
+    card.innerHTML=`
+      <div class="sample-head">
+        <div><h4>${esc(s.label)}</h4><div class="sub">${esc(s.material||'—')} · ${s.files?.length||0} files</div></div>
+        <span class="mono" style="color:var(--mute);font-size:18px">+</span>
+      </div>
+      <div class="sample-body" id="sb_${si}">
+        <div class="subgrid">
+          <div class="panelbox">
+            <h3><span class="tag laser">LASER</span> Parameters</h3>
+            ${kvu('Wavelength',s.laser?.wavelength,s.laser?.wavelength_u)}
+            ${kvu('Avg. power',s.laser?.power,s.laser?.power_u)}
+            ${kvu('Pulse energy',s.laser?.energy,s.laser?.energy_u)}
+            ${kvu('Frequency',s.laser?.frequency,s.laser?.frequency_u)}
+            ${kvu('Pulse duration',s.laser?.pulse,s.laser?.pulse_u)}
+            ${kvu('Scan speed',s.laser?.speed,s.laser?.speed_u)}
+            ${kvu('Spot size',s.laser?.spot,s.laser?.spot_u)}
+            ${kvu('Hatch spacing',s.laser?.hatch,s.laser?.hatch_u)}
+            ${kv('Passes',s.laser?.passes)}${kv('Source',s.laser?.source)}
+            ${s.laser?.notes?kv('Notes',s.laser.notes):''}
+          </div>
+          <div class="panelbox">
+            <h3><span class="tag chem">CHEM</span> Parameters</h3>
+            ${kv('Solution',s.chem?.solution)}
+            ${kvu('Concentration',s.chem?.concentration,s.chem?.concentration_u)}
+            ${kv('pH',s.chem?.ph)}${kv('Temp (°C)',s.chem?.temp)}
+            ${kvu('Voltage',s.chem?.voltage,s.chem?.voltage_u)}
+            ${kvu('Current density',s.chem?.current,s.chem?.current_u)}
+            ${kvu('Duration',s.chem?.duration,s.chem?.duration_u)}
+            ${kv('Process',s.chem?.process)}
+            ${s.chem?.notes?kv('Notes',s.chem.notes):''}
+          </div>
+        </div>
+        <div class="panelbox" style="margin-top:18px">
+          <h3><span class="tag file">FILES</span> Photos · Drawings · Reports</h3>
+          <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:6px">
+            <input type="file" id="fileIn_${si}" multiple style="flex:1;min-width:220px">
+            <select id="fileType_${si}" style="width:auto"><option value="photo">Photo</option><option value="drawing">Drawing</option><option value="report">Report</option></select>
+            <button class="btn btn-blue" id="up_${si}">Upload</button>
+          </div>
+          <div class="gallery" id="gal_${si}"></div>
+        </div>
+        <div style="margin-top:14px;display:flex;gap:10px">
+          <button class="btn btn-out" id="edit_${si}">Edit parameters</button>
+        </div>
+      </div>`;
+    area.appendChild(card);
+    card.querySelector('.sample-head').onclick=()=>{
+      document.getElementById('sb_'+si).classList.toggle('open');
+    };
+    setTimeout(()=>{
+      document.getElementById('up_'+si).onclick=()=>doUpload(p,si);
+      document.getElementById('edit_'+si).onclick=()=>openSampleForm(p,si);
+      renderGallery(p,si);
+    },0);
+  });
+}
+function kv(k,v){return `<div class="row"><span class="k">${k}</span><span class="v">${v!==undefined&&v!==''&&v!==null?esc(String(v)):'—'}</span></div>`;}
+function kvu(k,v,u){const has=v!==undefined&&v!==''&&v!==null;return `<div class="row"><span class="k">${k}</span><span class="v">${has?esc(String(v))+(u?' '+esc(u):''):'—'}</span></div>`;}
+
+function renderGallery(p,si){
+  const s=p.data.samples[si];const g=document.getElementById('gal_'+si);
+  if(!s.files||!s.files.length){g.innerHTML='<div class="empty-note" style="grid-column:1/-1">No files yet.</div>';return;}
+  g.innerHTML='';
+  s.files.forEach(f=>{
+    const d=document.createElement('div');d.className='fcard';
+    const isImg=f.type==='photo';
+    d.innerHTML=`${isImg&&f.thumb?`<img src="${f.thumb}" referrerpolicy="no-referrer" onerror="this.style.display='none'">`:''}
+      <div class="fmeta"><div class="ftype">${f.type.toUpperCase()}</div>
+      <a href="${f.link}" target="_blank">${esc(f.name)}</a></div>`;
+    g.appendChild(d);
+  });
+}
+
+async function doUpload(p,si){
+  const inp=document.getElementById('fileIn_'+si);
+  const type=document.getElementById('fileType_'+si).value;
+  if(!inp.files.length){toast('Choose file(s) first',true);return;}
+  const btn=document.getElementById('up_'+si);btn.innerHTML='<span class="loader"></span>';
+  const s=p.data.samples[si];s.files=s.files||[];
+  try{
+    // files grouped into a subfolder named after the sample, e.g. ProjectFolder/S-01/
+    const sampleFolder=await ensureSubfolder('Sample_'+s.label.replace(/[^\w-]+/g,'_'),p.folderId);
+    s.folderId=sampleFolder;
+    for(const file of inp.files){
+      const r=await uploadFile(file,sampleFolder);
+      s.files.push({id:r.id,name:r.name,type,link:r.webViewLink,thumb:r.thumbnailLink});
+    }
+    await saveProject(p);
+    renderGallery(p,si);
+    const sub=document.querySelector(`#sb_${si}`).closest('.sample-card').querySelector('.sub');
+    if(sub)sub.textContent=`${s.material||'—'} · ${s.files.length} files`;
+    toast('Uploaded to '+s.label+' folder');
+    inp.value='';
+  }catch(e){toast('Upload error: '+e.message,true);}
+  btn.textContent='Upload';
+}
+
+/* ---------- Sample form (add / edit) ---------- */
+function openSampleForm(p,si){
+  const editing=si!==undefined;
+  const s=editing?p.data.samples[si]:{label:'',material:'',laser:{},chem:{},files:[]};
+  document.getElementById('mainView').innerHTML=`
+    <div class="crumb mono">PROJECT / <b>${esc(p.data.name).toUpperCase()}</b> / ${editing?'EDIT':'NEW'} SAMPLE</div>
+    <div class="toolbar"><h2>${editing?'Edit':'Add'} Sample</h2>
+      <button class="btn btn-out" id="cancelS">← Back to project</button></div>
+    <div class="grid" style="max-width:860px">
+      <div class="panelbox">
+        <div class="two">
+          <div class="field"><label>Sample label *</label><input id="s_label" value="${esc(s.label)}" placeholder="S-01"></div>
+          <div class="field"><label>Material</label><input id="s_material" value="${esc(s.material||'')}" placeholder="Ti-6Al-4V"></div>
+        </div>
+      </div>
+      <div class="subgrid">
+        <div class="panelbox">
+          <h3><span class="tag laser">LASER</span> Parameters</h3>
+          ${prow('Wavelength','l_wavelength',s.laser?.wavelength,'l_wavelength_u',s.laser?.wavelength_u,['nm','µm'],'nm')}
+          ${prow('Average power','l_power',s.laser?.power,'l_power_u',s.laser?.power_u,['mW','W'],'W')}
+          ${prow('Pulse energy','l_energy',s.laser?.energy,'l_energy_u',s.laser?.energy_u,['nJ','µJ','mJ'],'µJ')}
+          ${prow('Frequency / rep. rate','l_freq',s.laser?.frequency,'l_freq_u',s.laser?.frequency_u,['Hz','kHz','MHz'],'kHz')}
+          ${prow('Pulse duration','l_pulse',s.laser?.pulse,'l_pulse_u',s.laser?.pulse_u,['fs','ps','ns','µs'],'ns')}
+          ${prow('Scan speed','l_speed',s.laser?.speed,'l_speed_u',s.laser?.speed_u,['mm/s','m/s'],'mm/s')}
+          ${prow('Spot size','l_spot',s.laser?.spot,'l_spot_u',s.laser?.spot_u,['µm','mm'],'µm')}
+          ${prow('Hatch / line spacing','l_hatch',s.laser?.hatch,'l_hatch_u',s.laser?.hatch_u,['µm','mm'],'µm')}
+          <div class="two">
+            <div class="field"><label>Passes / repetitions</label><input id="l_passes" value="${esc(s.laser?.passes||'')}"></div>
+            <div class="field"><label>Source / model</label><input id="l_source" value="${esc(s.laser?.source||'')}" placeholder="e.g. fiber, 1064 nm"></div>
+          </div>
+          <div class="field"><label>Notes</label><textarea id="l_notes" rows="2">${esc(s.laser?.notes||'')}</textarea></div>
+        </div>
+        <div class="panelbox">
+          <h3><span class="tag chem">CHEM</span> Parameters</h3>
+          <div class="field"><label>Solution / electrolyte</label><input id="c_sol" value="${esc(s.chem?.solution||'')}"></div>
+          ${prow('Concentration','c_conc',s.chem?.concentration,'c_conc_u',s.chem?.concentration_u,['%','M','mM','g/L'],'M')}
+          <div class="two">
+            <div class="field"><label>pH</label><input id="c_ph" value="${esc(s.chem?.ph||'')}"></div>
+            <div class="field"><label>Temp (°C)</label><input id="c_temp" value="${esc(s.chem?.temp||'')}"></div>
+          </div>
+          ${prow('Voltage','c_voltage',s.chem?.voltage,'c_voltage_u',s.chem?.voltage_u,['V','mV'],'V')}
+          ${prow('Current density','c_current',s.chem?.current,'c_current_u',s.chem?.current_u,['mA/cm²','A/cm²'],'mA/cm²')}
+          ${prow('Duration','c_dur',s.chem?.duration,'c_dur_u',s.chem?.duration_u,['s','min','h'],'min')}
+          <div class="field"><label>Process</label><input id="c_process" value="${esc(s.chem?.process||'')}" placeholder="e.g. etching, anodizing, cleaning"></div>
+          <div class="field"><label>Notes</label><textarea id="c_notes" rows="2">${esc(s.chem?.notes||'')}</textarea></div>
+        </div>
+      </div>
+      <button class="btn btn-acc" id="saveS" style="width:200px">${editing?'Save changes':'Add sample'}</button>
+    </div>`;
+  document.getElementById('cancelS').onclick=()=>renderProject();
+  document.getElementById('saveS').onclick=async()=>{
+    const label=document.getElementById('s_label').value.trim();
+    if(!label){toast('Label required',true);return;}
+    const obj={
+      label,material:document.getElementById('s_material').value,
+      laser:{
+        wavelength:v('l_wavelength'),wavelength_u:v('l_wavelength_u'),
+        power:v('l_power'),power_u:v('l_power_u'),
+        energy:v('l_energy'),energy_u:v('l_energy_u'),
+        frequency:v('l_freq'),frequency_u:v('l_freq_u'),
+        pulse:v('l_pulse'),pulse_u:v('l_pulse_u'),
+        speed:v('l_speed'),speed_u:v('l_speed_u'),
+        spot:v('l_spot'),spot_u:v('l_spot_u'),
+        hatch:v('l_hatch'),hatch_u:v('l_hatch_u'),
+        passes:v('l_passes'),source:v('l_source'),notes:v('l_notes')},
+      chem:{
+        solution:v('c_sol'),
+        concentration:v('c_conc'),concentration_u:v('c_conc_u'),
+        ph:v('c_ph'),temp:v('c_temp'),
+        voltage:v('c_voltage'),voltage_u:v('c_voltage_u'),
+        current:v('c_current'),current_u:v('c_current_u'),
+        duration:v('c_dur'),duration_u:v('c_dur_u'),
+        process:v('c_process'),notes:v('c_notes')},
+      folderId:editing?s.folderId:undefined,
+      files:editing?(s.files||[]):[]
+    };
+    const btn=document.getElementById('saveS');btn.innerHTML='<span class="loader"></span>';
+    try{
+      if(editing)p.data.samples[si]=obj;else p.data.samples.push(obj);
+      await writeParamsExcel(p);            // refresh the per-project .xlsx
+      await saveProject(p);renderProjectList();renderProject();toast('Sample saved · spreadsheet updated');
+    }catch(e){toast('Error: '+e.message,true);btn.textContent='Save';}
+  };
+}
+/* a parameter row: value input + unit dropdown */
+function prow(label,valId,val,unitId,unitVal,units,defU){
+  const sel=units.map(u=>`<option${ (unitVal||defU)===u?' selected':''}>${u}</option>`).join('');
+  return `<div class="field"><label>${label}</label>
+    <div class="valunit"><input id="${valId}" value="${esc(val||'')}">
+    <select id="${unitId}">${sel}</select></div></div>`;
+}
+function v(id){const el=document.getElementById(id);return el?el.value:'';}
+</script>
+</body>
+</html>
