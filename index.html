@@ -351,6 +351,23 @@
   .modal-x{background:transparent;font-size:20px;color:var(--mute);padding:2px 8px;border-radius:6px;line-height:1}
   .modal-x:hover{background:var(--panel2);color:var(--ink)}
 
+  /* ---- RECIPE TABLE (printer format) ---- */
+  .rectab{width:100%;border-collapse:collapse;font-size:13px;margin-top:4px}
+  .rectab th{text-align:left;font-size:10px;letter-spacing:1px;text-transform:uppercase;
+    color:var(--mute);font-weight:800;padding:7px 8px;border-bottom:2px solid var(--line);white-space:nowrap}
+  .rectab td{padding:7px 8px;border-bottom:1px solid var(--line);vertical-align:top}
+  .rectab tr:last-child td{border-bottom:none}
+  .rectab td.num{text-align:center;color:var(--mute);width:34px}
+  .us-yes{background:#e7f0fe;color:#1d4fd0;font-size:10px;font-weight:800;padding:2px 6px;border-radius:4px}
+  .recmeta{display:flex;flex-wrap:wrap;gap:14px;font-size:12px;color:var(--mute);margin-bottom:10px}
+  .recfoot{margin-top:10px;font-size:12px;color:var(--mute);font-style:italic;
+    background:var(--panel2);padding:9px 12px;border-radius:var(--r)}
+  .reccard{border:1px solid var(--line);border-radius:10px;padding:13px 15px;margin-bottom:10px;transition:.12s}
+  .reccard:hover{border-color:var(--acc);box-shadow:var(--shadow)}
+  .reccard-head{display:flex;align-items:center;justify-content:space-between;gap:12px}
+  .recdot{position:absolute;top:-2px;right:-2px;width:9px;height:9px;border-radius:50%;
+    background:#f79009;border:1.5px solid #fff}
+
   .syncstate{display:inline-flex;align-items:center;gap:6px;font-size:11px;font-weight:700;
     transition:opacity .4s;white-space:nowrap}
   .syncstate.busy{color:var(--mute)}
@@ -505,6 +522,7 @@ async function onConnected(){
   }catch(e){}
   try{
     await ensureRootFolder();
+    await loadConfig();
     await loadProjects();
     goProjects();                       // always land on the board when done
   }catch(e){
@@ -719,6 +737,43 @@ async function syncProjectFiles(p,save){
   return changed;
 }
 
+/* ============ LABCORE CONFIG (shared with the team via Drive) ============
+   Holds the Recipe Logger Apps Script URL used to read printed recipes.     */
+let labConfig={appsScriptUrl:''};
+let configFileId=null;
+async function loadConfig(){
+  try{ const local=localStorage.getItem('labcore_cfg');
+       if(local)labConfig=Object.assign(labConfig,JSON.parse(local)); }catch(e){}
+  try{
+    const id=await findFile('labcore_config.json',rootFolderId);
+    if(id){ configFileId=id;
+      const j=await readJson(id);
+      const obj=(typeof j==='string')?JSON.parse(j):j;
+      if(obj&&typeof obj==='object')labConfig=Object.assign(labConfig,obj);
+    }
+  }catch(e){ console.warn('[LABCORE] config load',e); }
+}
+async function saveConfig(){
+  try{ localStorage.setItem('labcore_cfg',JSON.stringify(labConfig)); }catch(e){}
+  try{ configFileId=await writeJson('labcore_config.json',rootFolderId,labConfig,configFileId); }
+  catch(e){ console.warn('[LABCORE] config save',e); }
+}
+
+/* ============ RECIPE LOGGER BRIDGE (read-only; printer app untouched) ====
+   Uses the existing Apps Script endpoint:  ?action=search&q=<name>&limit=N
+   Returns recipes in the printer's own format:
+   {printedAt, sampleName, recipeDateTime, logo, footer, rows:[{step,time,us,temp,notes}]}  */
+async function searchPrintedRecipes(q,limit){
+  const url=(labConfig.appsScriptUrl||'').trim();
+  if(!url)throw new Error('No Recipe Logger URL set — open Settings in the sidebar.');
+  const sep=url.indexOf('?')>=0?'&':'?';
+  const r=await fetch(`${url}${sep}action=search&q=${encodeURIComponent(q||'')}&limit=${limit||10}`,
+                      {signal:AbortSignal.timeout(10000)});
+  const j=await r.json();
+  if(!j.ok)throw new Error(j.error||'search failed');
+  return j.results||[];
+}
+
 /* find a file by exact name under a parent */
 async function findFile(name,parentId){
   const safe=name.replace(/'/g,"\\'");
@@ -773,6 +828,25 @@ async function writeParamsExcel(p){
   const wb=XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb,buildSheet(laserRows),'Laser');
   XLSX.utils.book_append_sheet(wb,buildSheet(chemRows),'Chemical');
+
+  // Recipes sheet — mirrors the thermal printer's own layout
+  const withRec=samples.filter(sm=>sm.recipe&&Array.isArray(sm.recipe.rows)&&sm.recipe.rows.length);
+  if(withRec.length){
+    const unitShort=u=>({min:'m.',s:'s.',h:'h.'}[u]||u||'');
+    const aoa=[['Sample','Printed at','Recipe date','#','Step','Time','US','Temp','Notes']];
+    withRec.forEach(sm=>{
+      const r=sm.recipe;
+      aoa.push([sm.label,r.printedAt||'',r.recipeDateTime||'','','','','','','']);
+      (r.rows||[]).forEach((row,i)=>aoa.push(['','','',row.index||i+1,row.step||'',
+        row.time?String(row.time)+(row.unit?' '+unitShort(row.unit):''):'',
+        row.us?'US':'',row.temp||'',row.notes||'']));
+      if(r.footer)aoa.push(['','','','','Notes: '+r.footer,'','','','']);
+      aoa.push(['','','','','','','','','']);
+    });
+    const ws=XLSX.utils.aoa_to_sheet(aoa);
+    ws['!cols']=[{wch:16},{wch:20},{wch:16},{wch:4},{wch:26},{wch:10},{wch:5},{wch:9},{wch:26}];
+    XLSX.utils.book_append_sheet(wb,ws,'Recipes');
+  }
   const out=XLSX.write(wb,{bookType:'xlsx',type:'array'});
   const blob=new Blob([out],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'});
   const name='parameters.xlsx';
@@ -990,6 +1064,50 @@ function renderNav(){
 }
 /* return to the projects board (logo click, after saving, etc.) */
 function goProjects(){ activeNav='projects'; renderNav(); renderHome(); }
+
+/* ---------- SETTINGS ---------- */
+function renderSettings(){
+  document.getElementById('mainView').innerHTML=`
+    <div class="tilebar"><h2>Settings</h2></div>
+    <div class="panelbox" style="max-width:760px">
+      <div class="panel-head"><h3><span class="tag chem">PRINTER</span> Recipe Logger link</h3></div>
+      <p style="color:var(--mute);font-size:13px;line-height:1.6;margin-bottom:14px">
+        Paste the <b>Google Apps Script web-app URL</b> of your thermal-printer Recipe Logger
+        (the same <code>/exec</code> address the printer page uses for its Google Sheet log).
+        LabCore uses it <b>read-only</b>, to pull recipes that were already printed so they can be
+        attached to samples. Nothing about your printer setup changes.
+      </p>
+      <div class="field">
+        <label>Apps Script /exec URL</label>
+        <input id="cfg_url" placeholder="https://script.google.com/macros/s/.../exec" value="${esc(labConfig.appsScriptUrl||'')}">
+      </div>
+      <div style="display:flex;gap:9px;flex-wrap:wrap">
+        <button class="btn btn-acc" id="cfg_save">Save</button>
+        <button class="btn btn-out" id="cfg_test">Test connection</button>
+      </div>
+      <div id="cfg_result" style="margin-top:14px;font-size:13px"></div>
+      <p style="color:var(--mute);font-size:12px;margin-top:16px;line-height:1.6">
+        Saved into the shared <code>LABCORE_DATA</code> folder, so the whole team gets it automatically.
+      </p>
+    </div>`;
+  document.getElementById('cfg_save').onclick=async()=>{
+    labConfig.appsScriptUrl=document.getElementById('cfg_url').value.trim();
+    await saveConfig(); toast('Settings saved');
+  };
+  document.getElementById('cfg_test').onclick=async()=>{
+    const res=document.getElementById('cfg_result');
+    labConfig.appsScriptUrl=document.getElementById('cfg_url').value.trim();
+    res.innerHTML='<span class="loader"></span> Contacting Recipe Logger...';
+    try{
+      const rows=await searchPrintedRecipes('',5);
+      res.innerHTML=`<span style="color:#12b76a;font-weight:700">Connected.</span>
+        Found ${rows.length} recent recipe(s)`+
+        (rows.length?`: ${rows.map(r=>esc(r.sampleName)).join(', ')}`:'.');
+    }catch(e){
+      res.innerHTML=`<span style="color:var(--warn);font-weight:700">Failed: ${esc(e.message||String(e))}</span>`;
+    }
+  };
+}
 
 let homeFilter='all', homeSearch='';
 function renderHome(){
@@ -1601,6 +1719,7 @@ function openProjectEdit(p){
 
 function renderProjectTasks(p){
   const el=document.getElementById('pj_tasklist');
+  if(!el)return;
   const tasks=p.data.tasks||[];
   if(!tasks.length){el.innerHTML='<div class="empty-note" style="padding:10px">No tasks.</div>';return;}
   el.innerHTML='';
@@ -1667,6 +1786,7 @@ async function addProjectPerson(){
 }
 function renderDrawings(p){
   const g=document.getElementById('pj_drawgal');
+  if(!g)return;
   const dr=p.data.drawings||[];
   if(!dr.length){g.innerHTML='<div class="empty-note" style="grid-column:1/-1;padding:10px">No drawings.</div>';return;}
   g.innerHTML='';
@@ -1701,6 +1821,7 @@ async function saveProject(p){
 /* ---------- SAMPLES as tiles with parameter bubbles ---------- */
 function renderSamples(p){
   const area=document.getElementById('sampleArea');
+  if(!area)return;                       // project view not on screen
   if(!p.data.samples.length){
     area.innerHTML='<div class="empty-note">No samples yet. Add one to record laser &amp; chemical parameters and upload photos.</div>';
     return;
@@ -1726,7 +1847,7 @@ function renderSamples(p){
       </div>
       <div class="stile-btns">
         <button class="pbtn laser${hasLaser?' filled':''}" title="Laser parameters">L</button>
-        <button class="pbtn chem${hasChem?' filled':''}" title="Chemical parameters">C</button>
+        <button class="pbtn chem${(hasChem||sm.recipe)?' filled':''}" title="Chemical parameters${sm.recipe?' + printed recipe':''}">C${sm.recipe?'<span class="recdot"></span>':''}</button>
         <button class="pbtn files${nFiles?' filled':''}" title="Photos &amp; files">${nFiles||'0'}</button>
       </div>`;
     // whole tile opens the full overview; the small buttons are shortcuts
@@ -1761,6 +1882,100 @@ function paramRows(sm,which){
     ['Process',s.process],['Notes',s.notes]
   ];
   return rows.map(([k,v,u])=>kvu(k,v,u)).join('');
+}
+
+/* ---------- CHEMICAL RECIPE (printer format, unchanged) ----------
+   A sample's recipe is stored exactly as the printer logs it:
+   {printedAt, sampleName, recipeDateTime, mode, logo, footer,
+    rows:[{index, step, time, unit, us, temp, notes}]}                */
+function recipeTableHtml(rec){
+  if(!rec||!Array.isArray(rec.rows)||!rec.rows.length)
+    return '<div class="empty-note" style="padding:12px">No recipe attached.</div>';
+  const unitShort=u=>({min:'m.',s:'s.',h:'h.'}[u]||u||'');
+  return `
+    <div class="recmeta">
+      ${rec.recipeDateTime?`<span><b>Recipe date:</b> ${esc(String(rec.recipeDateTime))}</span>`:''}
+      ${rec.printedAt?`<span><b>Printed:</b> ${esc(fmtStamp(rec.printedAt))}</span>`:''}
+      ${rec.sampleName?`<span><b>Printed as:</b> ${esc(rec.sampleName)}</span>`:''}
+    </div>
+    <table class="rectab">
+      <thead><tr><th>#</th><th>Step</th><th>Time</th><th>US</th><th>Temp</th><th>Notes</th></tr></thead>
+      <tbody>
+        ${rec.rows.map((r,i)=>`<tr>
+          <td class="num">${r.index||i+1}</td>
+          <td>${esc(r.step||'')}</td>
+          <td>${esc(r.time?String(r.time)+(r.unit?' '+unitShort(r.unit):''):'')}</td>
+          <td class="num">${r.us?'<span class="us-yes">US</span>':''}</td>
+          <td>${esc(r.temp||'')}</td>
+          <td>${esc(r.notes||'')}</td>
+        </tr>`).join('')}
+      </tbody>
+    </table>
+    ${rec.footer?`<div class="recfoot"><b>Notes:</b> ${esc(rec.footer)}</div>`:''}`;
+}
+function fmtStamp(v){
+  const d=new Date(v);
+  return isNaN(d)?String(v):d.toLocaleString(undefined,
+    {year:'numeric',month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'});
+}
+
+/* browse recipes already printed, and attach one to this sample */
+async function pickRecipe(p,si,queryOverride){
+  const sm=p.data.samples[si];
+  const q=queryOverride!==undefined?queryOverride:sm.label;
+  openModal(`<span class="tag chem">RECIPE</span> Attach printed recipe to ${esc(sm.label)}`,
+    `<div style="display:flex;gap:8px;margin-bottom:14px">
+       <input id="rq" value="${esc(q)}" placeholder="Search by printed sample name" style="flex:1">
+       <button class="btn btn-out" id="rqgo">Search</button>
+     </div>
+     <div id="rres"><span class="loader"></span> Searching…</div>`,true);
+  document.getElementById('rqgo').onclick=()=>pickRecipe(p,si,document.getElementById('rq').value);
+  document.getElementById('rq').onkeydown=e=>{
+    if(e.key==='Enter'){e.preventDefault();pickRecipe(p,si,document.getElementById('rq').value);} };
+  const box=document.getElementById('rres');
+  try{
+    const results=await searchPrintedRecipes(q,12);
+    if(!results.length){
+      box.innerHTML=`<div class="empty-note" style="padding:16px">
+        No printed recipes found for "${esc(q)}".<br><br>
+        <span style="color:var(--mute)">Recipes appear here after they are printed from the thermal-printer
+        page with Google-Sheet logging switched on. Try clearing the search box to list the most recent ones.</span>
+      </div>`;
+      return;
+    }
+    box.innerHTML='';
+    results.forEach((rec,i)=>{
+      const card=document.createElement('div');
+      card.className='reccard';
+      card.innerHTML=`
+        <div class="reccard-head">
+          <div><b>${esc(rec.sampleName||'(unnamed)')}</b>
+            <div style="font-size:12px;color:var(--mute)">
+              ${esc(fmtStamp(rec.printedAt))} · ${(rec.rows||[]).length} step(s)</div></div>
+          <button class="btn btn-acc" style="padding:7px 14px;font-size:12px">Attach</button>
+        </div>
+        <div style="font-size:12px;color:var(--mute);margin-top:6px">
+          ${esc((rec.rows||[]).map(r=>r.step).filter(Boolean).slice(0,4).join(' → '))}${(rec.rows||[]).length>4?' →…':''}
+        </div>`;
+      card.querySelector('button').onclick=async()=>{
+        sm.recipe=rec;                      // stored verbatim, nothing lost
+        await saveProject(p);
+        await writeParamsExcel(p);
+        toast('Recipe attached to '+sm.label);
+        showSample(p,si); renderSamples(p);
+      };
+      box.appendChild(card);
+    });
+  }catch(e){
+    box.innerHTML=`<div class="empty-note" style="padding:16px;color:var(--warn)">
+      ${esc(e.message||String(e))}</div>`;
+  }
+}
+async function detachRecipe(p,si){
+  const sm=p.data.samples[si];
+  delete sm.recipe;
+  await saveProject(p); await writeParamsExcel(p);
+  toast('Recipe removed'); showSample(p,si); renderSamples(p);
 }
 
 /* ---------- FULL SAMPLE OVERVIEW (click the tile) ---------- */
@@ -1801,6 +2016,18 @@ function showSample(p,si){
        </div>
      </div>
 
+     <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin:20px 0 8px">
+       <h3 style="font-size:12px;letter-spacing:1.3px;text-transform:uppercase;margin:0">
+         <span class="tag chem">RECIPE</span> Chemical process</h3>
+       <span style="display:flex;gap:7px">
+         <button class="btn btn-out" style="padding:6px 12px;font-size:12px"
+           onclick="pickRecipe(projects[selectedProjectIndex],${si})">${sm.recipe?'Change':'+ Attach printed recipe'}</button>
+         ${sm.recipe?`<button class="btn btn-out" style="padding:6px 12px;font-size:12px"
+           onclick="detachRecipe(projects[selectedProjectIndex],${si})">Remove</button>`:''}
+       </span>
+     </div>
+     ${recipeTableHtml(sm.recipe)}
+
      <h3 style="font-size:12px;letter-spacing:1.3px;text-transform:uppercase;margin:20px 0 4px">
        <span class="tag file">FILES</span> ${files.length} item(s)${photos.length?` · ${photos.length} photo(s)`:''}${others.length?` · ${others.length} other`:''}</h3>
      ${thumbs}
@@ -1829,13 +2056,20 @@ async function openSampleFolder(p,si){
 function showParams(p,si,which){
   const sm=p.data.samples[si];
   const laser=which==='laser';
-  const body=paramRows(sm,which)+
+  const recipeBlock=(!laser)?`
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin:18px 0 8px">
+      <h3 style="font-size:12px;letter-spacing:1.3px;text-transform:uppercase;margin:0">
+        <span class="tag chem">RECIPE</span> Chemical process</h3>
+      <button class="btn btn-out" style="padding:6px 12px;font-size:12px"
+        onclick="pickRecipe(projects[selectedProjectIndex],${si})">${sm.recipe?'Change':'+ Attach'}</button>
+    </div>${recipeTableHtml(sm.recipe)}`:'';
+  const body=paramRows(sm,which)+recipeBlock+
     `<div style="display:flex;gap:9px;margin-top:16px">
        <button class="btn btn-acc" style="flex:1"
          onclick="closeModal();openSampleForm(projects[selectedProjectIndex],${si})">✎ Edit parameters</button>
        <button class="btn btn-out" onclick="showSample(projects[selectedProjectIndex],${si})">View all</button>
      </div>`;
-  openModal(`<span class="tag ${laser?'laser':'chem'}">${laser?'LASER':'CHEM'}</span> ${esc(sm.label)}`,body);
+  openModal(`<span class="tag ${laser?'laser':'chem'}">${laser?'LASER':'CHEM'}</span> ${esc(sm.label)}`,body,!laser&&!!sm.recipe);
 }
 
 /* modal: photos / files for a sample */
@@ -1862,6 +2096,7 @@ function kvu(k,v,u){const has=v!==undefined&&v!==''&&v!==null;return `<div class
 
 function renderGallery(p,si){
   const s=p.data.samples[si];const g=document.getElementById('gal_'+si);
+  if(!g)return;
   if(!s.files||!s.files.length){g.innerHTML='<div class="empty-note" style="grid-column:1/-1">No files yet.</div>';return;}
   g.innerHTML='';
   s.files.forEach(f=>{
