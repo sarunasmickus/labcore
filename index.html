@@ -308,6 +308,49 @@
   .sum-miss{color:var(--warn);font-weight:700}
   .sum-ok{color:#12b76a;font-weight:700}
 
+  /* ---- PROJECT PAGE 2x2 GRID ---- */
+  .pgrid{display:grid;grid-template-columns:1fr 1fr;gap:16px;align-items:start}
+  @media(max-width:1000px){.pgrid{grid-template-columns:1fr}}
+  .pgrid .span2{grid-column:1/-1}
+  .pgrid .panelbox{margin:0}
+  .panel-head{display:flex;align-items:center;justify-content:space-between;gap:10px;
+    margin-bottom:14px;padding-bottom:11px;border-bottom:1px solid var(--line)}
+  .panel-head h3{margin:0;font-size:13px;letter-spacing:1.4px;text-transform:uppercase;
+    display:flex;align-items:center;gap:8px}
+
+  /* ---- SAMPLE TILES ---- */
+  .sgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:12px}
+  .stile{border:1px solid var(--line);border-radius:10px;padding:13px 14px;background:#fff;
+    transition:.13s;display:flex;flex-direction:column;gap:10px}
+  .stile:hover{box-shadow:var(--shadow-lg);border-color:var(--acc)}
+  .stile-name{font-size:14px;font-weight:800;line-height:1.3;cursor:pointer}
+  .stile-name:hover{color:var(--acc)}
+  .stile-sub{font-size:11px;color:var(--mute);margin-top:2px}
+  .stile-btns{display:flex;gap:7px;margin-top:auto}
+  .pbtn{width:34px;height:34px;border-radius:50%;display:grid;place-items:center;
+    font-size:13px;font-weight:800;border:1.5px solid var(--line);background:#fff;
+    color:var(--mute);transition:.12s;position:relative;flex-shrink:0}
+  .pbtn:hover{transform:scale(1.08)}
+  .pbtn.laser{border-color:#2f6df6;color:#2f6df6}
+  .pbtn.laser.filled{background:#2f6df6;color:#fff}
+  .pbtn.chem{border-color:#0e9f8c;color:#0e9f8c}
+  .pbtn.chem.filled{background:#0e9f8c;color:#fff}
+  .pbtn.files{border-color:#f79009;color:#b25a06;font-size:11px}
+  .pbtn.files.filled{background:#f79009;color:#fff}
+
+  /* ---- MODAL ---- */
+  .modal-bg{position:fixed;inset:0;background:rgba(16,24,40,.45);z-index:300;
+    display:none;align-items:center;justify-content:center;padding:20px}
+  .modal-bg.open{display:flex}
+  .modal{background:#fff;border-radius:14px;max-width:640px;width:100%;
+    max-height:86vh;overflow-y:auto;box-shadow:0 20px 60px rgba(16,24,40,.3)}
+  .modal-head{display:flex;align-items:center;justify-content:space-between;gap:12px;
+    padding:18px 22px;border-bottom:1px solid var(--line);position:sticky;top:0;background:#fff;z-index:2}
+  .modal-head h3{font-size:16px;font-weight:800;margin:0;text-transform:none;letter-spacing:0}
+  .modal-body{padding:20px 22px}
+  .modal-x{background:transparent;font-size:20px;color:var(--mute);padding:2px 8px;border-radius:6px;line-height:1}
+  .modal-x:hover{background:var(--panel2);color:var(--ink)}
+
   .tilebar{display:flex;justify-content:space-between;align-items:center;gap:14px;margin-bottom:22px;flex-wrap:wrap}
   .tilebar h2{font-size:24px;font-weight:900;letter-spacing:-.4px}
   .filterbar{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
@@ -358,6 +401,14 @@
 </div>
 
 <div id="toast" class="toast"></div>
+
+<div class="modal-bg" id="modalBg" onclick="if(event.target===this)closeModal()">
+  <div class="modal">
+    <div class="modal-head"><h3 id="modalTitle"></h3>
+      <button class="modal-x" onclick="closeModal()">✕</button></div>
+    <div class="modal-body" id="modalBody"></div>
+  </div>
+</div>
 
 <!-- Google APIs -->
 <script src="https://apis.google.com/js/api.js"></script>
@@ -1261,77 +1312,151 @@ function renderNewTasks(){
     ||'<div class="empty-note" style="padding:10px">No tasks added.</div>';
 }
 
-/* ---------- Render single project ---------- */
+/* ---------- Render single project (2x2 layout) ---------- */
 function renderProject(){
   const p=projects[selectedProjectIndex];if(!p)return;
   const d=p.data;
   const prio=d.priority||'Medium';
+  const people=projectPeople(d);
+  const doneTasks=(d.tasks||[]).filter(t=>t.done).length, allTasks=(d.tasks||[]).length;
   document.getElementById('mainView').innerHTML=`
     <div class="crumb mono"><a href="#" onclick="goProjects();return false" style="color:var(--acc);text-decoration:none">← ALL PROJECTS</a> / <b>${esc(d.name).toUpperCase()}</b></div>
+
     <div class="toolbar">
-      <h2>${esc(d.name)} <span class="prio prio-${prio.toLowerCase()}">${prio}</span>
-        ${d.status==='done'?'<span class="done-badge" style="margin-left:8px;vertical-align:middle">✓ DONE</span>':`<span class="dl ${deadlineInfo(d.deadline).cls}" style="margin-left:8px;font-size:12px;vertical-align:middle">${deadlineInfo(d.deadline).label}</span>`}</h2>
-      <div style="display:flex;gap:10px;flex-wrap:wrap">
-        <select id="pj_priority" class="btn-out" style="padding:8px 12px;width:auto">
-          ${['Low','Medium','High','Urgent'].map(x=>`<option${prio===x?' selected':''}>${x}</option>`).join('')}
-        </select>
-        <input type="date" id="pj_deadline" class="btn-out" style="padding:8px 12px;width:auto" value="${d.deadline||''}">
-        <select id="pj_status" class="btn-out" style="padding:8px 12px;width:auto">
-          <option value="active"${d.status==='active'?' selected':''}>Active</option>
-          <option value="done"${d.status==='done'?' selected':''}>Completed</option>
-          <option value="archived"${d.status==='archived'?' selected':''}>Archived</option>
-        </select>
+      <div style="display:flex;align-items:center;gap:11px;flex-wrap:wrap">
+        <h2 style="margin:0">${esc(d.name)}</h2>
+        <span class="prio prio-${prio.toLowerCase()}" style="margin:0">${prio}</span>
+        ${d.status==='done'
+          ?'<span class="done-badge">✓ DONE</span>'
+          :`<span class="dl ${deadlineInfo(d.deadline).cls}">${deadlineInfo(d.deadline).label}</span>`}
+        ${people.length?`<span title="${esc(people.join(', '))}" style="cursor:default">${bubblesHtml(people,6)}</span>`:''}
+      </div>
+      <div style="display:flex;gap:9px;flex-wrap:wrap">
+        <button class="btn btn-out" id="editProjectBtn">✎ Edit project</button>
         <button class="btn btn-acc" id="addSampleBtn">+ Add Sample</button>
       </div>
     </div>
-    ${d.description?`<p style="color:var(--mute);max-width:700px;margin-bottom:20px;line-height:1.6">${esc(d.description)}</p>`:''}
+    ${d.description?`<p style="color:var(--mute);max-width:820px;margin-bottom:18px;line-height:1.6">${esc(d.description)}</p>`:''}
 
-    <div class="subgrid" style="margin-bottom:24px">
-      <div class="panelbox">
-        <h3><span class="tag chem">PEOPLE</span> On this project</h3>
-        <div id="pj_peoplepick" class="people-pick"></div>
-        <div style="display:flex;gap:8px">
-          <input id="pj_personinput" placeholder="Add a person by name" style="flex:1" onkeydown="if(event.key==='Enter'){event.preventDefault();addProjectPerson()}">
-          <button class="btn btn-out" type="button" onclick="addProjectPerson()" style="padding:11px 16px">+</button>
+    <div class="pgrid">
+
+      <!-- SAMPLES — full width -->
+      <div class="panelbox span2">
+        <div class="panel-head">
+          <h3><span class="tag laser">SAMPLES</span> ${d.samples.length} in this project</h3>
+          <button class="btn btn-out" style="padding:7px 14px;font-size:12px" onclick="openSampleForm(projects[selectedProjectIndex])">+ Add</button>
         </div>
+        <div id="sampleArea"></div>
       </div>
 
+      <!-- SPREADSHEET & FILES -->
       <div class="panelbox">
-        <h3><span class="tag file">TASKS</span> To Do</h3>
+        <div class="panel-head"><h3><span class="tag chem">DATA</span> Spreadsheet &amp; files</h3></div>
+        ${d.excelLink
+          ?`<a class="filelink" href="${d.excelLink}" target="_blank">📊 parameters.xlsx — open in Drive</a>`
+          :'<div class="empty-note" style="padding:10px">Spreadsheet appears after the first sample is saved.</div>'}
+        <div style="display:flex;gap:8px;margin:14px 0 8px">
+          <input type="file" id="pj_drawin" multiple style="flex:1">
+          <button class="btn btn-blue" id="pj_drawup" style="white-space:nowrap">Add</button>
+        </div>
+        <div class="gallery" id="pj_drawgal"></div>
+      </div>
+
+      <!-- TASKS -->
+      <div class="panelbox">
+        <div class="panel-head"><h3><span class="tag file">TO DO</span> ${allTasks?`${doneTasks}/${allTasks} done`:'No tasks yet'}</h3></div>
         <div style="display:flex;gap:8px;margin-bottom:10px">
           <input id="pj_taskinput" placeholder="Add a task…" style="flex:1" onkeydown="if(event.key==='Enter'){event.preventDefault();addProjectTask()}">
           <button class="btn btn-out" type="button" onclick="addProjectTask()" style="padding:11px 16px">+</button>
         </div>
         <div id="pj_tasklist" class="tasklist"></div>
       </div>
-      <div class="panelbox">
-        <h3><span class="tag laser">DRAWINGS</span> &amp; Spreadsheet</h3>
-        ${d.excelLink?`<a class="filelink" href="${d.excelLink}" target="_blank">📊 parameters.xlsx — open in Drive</a>`:'<div class="empty-note" style="padding:10px">Spreadsheet will appear after first save.</div>'}
-        <div style="display:flex;gap:8px;margin:12px 0 6px">
-          <input type="file" id="pj_drawin" multiple style="flex:1">
-          <button class="btn btn-blue" id="pj_drawup" style="white-space:nowrap">Add</button>
-        </div>
-        <div class="gallery" id="pj_drawgal"></div>
-      </div>
-    </div>
 
-    <div class="sec-label">Samples · ${d.samples.length}</div>
-    <div id="sampleArea"></div>`;
-  document.getElementById('pj_status').onchange=async(e)=>{
-    d.status=e.target.value;await saveProject(p);toast('Status updated');
-  };
-  document.getElementById('pj_priority').onchange=async(e)=>{
-    d.priority=e.target.value;await saveProject(p);renderProject();toast('Priority updated');
-  };
-  document.getElementById('pj_deadline').onchange=async(e)=>{
-    d.deadline=e.target.value;await saveProject(p);renderProject();toast('Deadline updated');
-  };
+    </div>`;
+  document.getElementById('editProjectBtn').onclick=()=>openProjectEdit(p);
   document.getElementById('addSampleBtn').onclick=()=>openSampleForm(p);
   document.getElementById('pj_drawup').onclick=()=>uploadDrawings(p);
-  renderProjectPeople(p);
   renderProjectTasks(p);
   renderDrawings(p);
   renderSamples(p);
+}
+
+/* ---------- modal helpers ---------- */
+function openModal(title,html){
+  document.getElementById('modalTitle').innerHTML=title;
+  document.getElementById('modalBody').innerHTML=html;
+  document.getElementById('modalBg').classList.add('open');
+}
+function closeModal(){document.getElementById('modalBg').classList.remove('open');}
+document.addEventListener('keydown',e=>{if(e.key==='Escape')closeModal();});
+
+/* ---------- EDIT PROJECT (name, status, priority, deadline, description, people) ---------- */
+function openProjectEdit(p){
+  const d=p.data;
+  document.getElementById('mainView').innerHTML=`
+    <div class="crumb mono"><a href="#" onclick="renderProject();return false" style="color:var(--acc);text-decoration:none">← BACK TO PROJECT</a> / EDIT</div>
+    <div class="toolbar" style="margin-bottom:14px"><h2>Edit project</h2></div>
+    <div class="np-grid">
+      <div class="fsec">
+        <div class="fsec-head"><span class="fsec-num">1</span><h3>Project details</h3><span class="hint">required</span></div>
+        <div class="field"><label>Project name<span class="req">*</span></label>
+          <input id="ep_name" value="${esc(d.name)}"></div>
+        <div class="three">
+          <div class="field"><label>Status<span class="req">*</span></label>
+            <select id="ep_status">
+              ${['active','done','archived'].map(x=>`<option value="${x}"${d.status===x?' selected':''}>${x==='done'?'Completed':x[0].toUpperCase()+x.slice(1)}</option>`).join('')}
+            </select></div>
+          <div class="field"><label>Priority<span class="req">*</span></label>
+            <select id="ep_priority">
+              ${['Urgent','High','Medium','Low'].map(x=>`<option${d.priority===x?' selected':''}>${x}</option>`).join('')}
+            </select></div>
+          <div class="field"><label>Deadline<span class="req">*</span></label>
+            <input type="date" id="ep_deadline" value="${d.deadline||''}"></div>
+        </div>
+        <div class="field" style="margin-bottom:0"><label>Description<span class="req">*</span></label>
+          <textarea id="ep_desc" rows="3">${esc(d.description||'')}</textarea></div>
+        <div class="errmsg" id="eperr"></div>
+      </div>
+
+      <div class="fsec">
+        <div class="fsec-head"><span class="fsec-num">2</span><h3>People</h3><span class="hint">1+ person</span></div>
+        <div class="field" style="margin-bottom:0">
+          <label>People on this project<span class="req">*</span></label>
+          <div id="pj_peoplepick" class="people-pick"></div>
+          <div style="display:flex;gap:7px">
+            <input id="pj_personinput" placeholder="Add person" style="flex:1" onkeydown="if(event.key==='Enter'){event.preventDefault();addProjectPerson()}">
+            <button class="btn btn-out" type="button" onclick="addProjectPerson()" style="padding:8px 14px">+</button>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div style="display:flex;gap:10px;margin-top:16px">
+      <button class="btn btn-acc" id="ep_save" style="min-width:170px">Save changes</button>
+      <button class="btn btn-out" onclick="renderProject()">Cancel</button>
+    </div>`;
+  renderProjectPeople(p);
+  document.getElementById('ep_save').onclick=async()=>{
+    const g=id=>document.getElementById(id);
+    ['ep_name','ep_deadline','ep_desc'].forEach(id=>g(id).classList.remove('invalid'));
+    const name=g('ep_name').value.trim(), dl=g('ep_deadline').value, desc=g('ep_desc').value.trim();
+    const missing=[];
+    if(!name){missing.push('name');g('ep_name').classList.add('invalid');}
+    if(!dl){missing.push('deadline');g('ep_deadline').classList.add('invalid');}
+    if(!desc){missing.push('description');g('ep_desc').classList.add('invalid');}
+    if(missing.length){
+      g('eperr').textContent='Please fill in: '+missing.join(', ')+'.';
+      g('eperr').classList.add('show'); return;
+    }
+    if(!(p.data.people||[]).length){toast('Add at least one person',true);return;}
+    const btn=g('ep_save');btn.innerHTML='<span class="loader"></span> Saving…';
+    try{
+      d.name=name; d.status=g('ep_status').value; d.priority=g('ep_priority').value;
+      d.deadline=dl; d.description=desc;
+      await saveProject(p);
+      peopleColorMap=null;
+      toast('Project updated'); renderProject();
+    }catch(e){toast('Error: '+e.message,true);btn.textContent='Save changes';}
+  };
 }
 
 function renderProjectTasks(p){
@@ -1433,68 +1558,83 @@ async function saveProject(p){
 }
 
 /* ---------- Samples ---------- */
+/* ---------- SAMPLES as tiles with parameter bubbles ---------- */
 function renderSamples(p){
   const area=document.getElementById('sampleArea');
-  if(!p.data.samples.length){area.innerHTML='<div class="empty-note">No samples yet. Add one to record laser & chemical parameters and upload files.</div>';return;}
-  area.innerHTML='';
-  p.data.samples.forEach((s,si)=>{
-    const card=document.createElement('div');card.className='sample-card';
-    card.innerHTML=`
-      <div class="sample-head">
-        <div><h4>${esc(s.label)}</h4><div class="sub">${esc(s.material||'—')} · ${s.files?.length||0} files</div></div>
-        <span class="mono" style="color:var(--mute);font-size:18px">+</span>
+  if(!p.data.samples.length){
+    area.innerHTML='<div class="empty-note">No samples yet. Add one to record laser &amp; chemical parameters and upload photos.</div>';
+    return;
+  }
+  area.innerHTML='<div class="sgrid"></div>';
+  const grid=area.querySelector('.sgrid');
+  p.data.samples.forEach((sm,si)=>{
+    const nFiles=(sm.files||[]).length;
+    const hasLaser=hasValues(sm.laser), hasChem=hasValues(sm.chem);
+    const el=document.createElement('div');
+    el.className='stile';
+    el.innerHTML=`
+      <div>
+        <div class="stile-name" title="Edit sample">${esc(sm.label)}</div>
+        <div class="stile-sub">${esc(sm.material||'no material')}</div>
       </div>
-      <div class="sample-body" id="sb_${si}">
-        <div class="subgrid">
-          <div class="panelbox">
-            <h3><span class="tag laser">LASER</span> Parameters</h3>
-            ${kvu('Wavelength',s.laser?.wavelength,s.laser?.wavelength_u)}
-            ${kvu('Avg. power',s.laser?.power,s.laser?.power_u)}
-            ${kvu('Pulse energy',s.laser?.energy,s.laser?.energy_u)}
-            ${kvu('Frequency',s.laser?.frequency,s.laser?.frequency_u)}
-            ${kvu('Pulse duration',s.laser?.pulse,s.laser?.pulse_u)}
-            ${kvu('Scan speed',s.laser?.speed,s.laser?.speed_u)}
-            ${kvu('Spot size',s.laser?.spot,s.laser?.spot_u)}
-            ${kvu('Hatch spacing',s.laser?.hatch,s.laser?.hatch_u)}
-            ${kv('Passes',s.laser?.passes)}${kv('Source',s.laser?.source)}
-            ${s.laser?.notes?kv('Notes',s.laser.notes):''}
-          </div>
-          <div class="panelbox">
-            <h3><span class="tag chem">CHEM</span> Parameters</h3>
-            ${kv('Solution',s.chem?.solution)}
-            ${kvu('Concentration',s.chem?.concentration,s.chem?.concentration_u)}
-            ${kv('pH',s.chem?.ph)}${kv('Temp (°C)',s.chem?.temp)}
-            ${kvu('Voltage',s.chem?.voltage,s.chem?.voltage_u)}
-            ${kvu('Current density',s.chem?.current,s.chem?.current_u)}
-            ${kvu('Duration',s.chem?.duration,s.chem?.duration_u)}
-            ${kv('Process',s.chem?.process)}
-            ${s.chem?.notes?kv('Notes',s.chem.notes):''}
-          </div>
-        </div>
-        <div class="panelbox" style="margin-top:18px">
-          <h3><span class="tag file">FILES</span> Photos · Drawings · Reports</h3>
-          <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:6px">
-            <input type="file" id="fileIn_${si}" multiple style="flex:1;min-width:220px">
-            <select id="fileType_${si}" style="width:auto"><option value="photo">Photo</option><option value="drawing">Drawing</option><option value="report">Report</option></select>
-            <button class="btn btn-blue" id="up_${si}">Upload</button>
-          </div>
-          <div class="gallery" id="gal_${si}"></div>
-        </div>
-        <div style="margin-top:14px;display:flex;gap:10px">
-          <button class="btn btn-out" id="edit_${si}">Edit parameters</button>
-        </div>
+      <div class="stile-btns">
+        <button class="pbtn laser${hasLaser?' filled':''}" title="Laser parameters">L</button>
+        <button class="pbtn chem${hasChem?' filled':''}" title="Chemical parameters">C</button>
+        <button class="pbtn files${nFiles?' filled':''}" title="Photos &amp; files">${nFiles||'0'}</button>
       </div>`;
-    area.appendChild(card);
-    card.querySelector('.sample-head').onclick=()=>{
-      document.getElementById('sb_'+si).classList.toggle('open');
-    };
-    setTimeout(()=>{
-      document.getElementById('up_'+si).onclick=()=>doUpload(p,si);
-      document.getElementById('edit_'+si).onclick=()=>openSampleForm(p,si);
-      renderGallery(p,si);
-    },0);
+    const [bL,bC,bF]=el.querySelectorAll('.pbtn');
+    bL.onclick=()=>showParams(p,si,'laser');
+    bC.onclick=()=>showParams(p,si,'chem');
+    bF.onclick=()=>showFiles(p,si);
+    el.querySelector('.stile-name').onclick=()=>openSampleForm(p,si);
+    grid.appendChild(el);
   });
 }
+/* does a parameter group have any values filled in? */
+function hasValues(o){
+  if(!o)return false;
+  return Object.keys(o).some(k=>!k.endsWith('_u')&&o[k]!==''&&o[k]!==undefined&&o[k]!==null);
+}
+
+/* modal: show one parameter set for a sample */
+function showParams(p,si,which){
+  const sm=p.data.samples[si];
+  const laser=which==='laser';
+  const s=laser?(sm.laser||{}):(sm.chem||{});
+  const rows=laser?[
+    ['Wavelength',s.wavelength,s.wavelength_u],['Average power',s.power,s.power_u],
+    ['Pulse energy',s.energy,s.energy_u],['Frequency / rep. rate',s.frequency,s.frequency_u],
+    ['Pulse duration',s.pulse,s.pulse_u],['Scan speed',s.speed,s.speed_u],
+    ['Spot size',s.spot,s.spot_u],['Hatch / line spacing',s.hatch,s.hatch_u],
+    ['Passes / repetitions',s.passes],['Source / model',s.source],['Notes',s.notes]
+  ]:[
+    ['Solution / electrolyte',s.solution],['Concentration',s.concentration,s.concentration_u],
+    ['pH',s.ph],['Temperature (°C)',s.temp],['Voltage',s.voltage,s.voltage_u],
+    ['Current density',s.current,s.current_u],['Duration',s.duration,s.duration_u],
+    ['Process',s.process],['Notes',s.notes]
+  ];
+  const body=rows.map(([k,v,u])=>kvu(k,v,u)).join('')+
+    `<button class="btn btn-acc" style="margin-top:16px;width:100%"
+       onclick="closeModal();openSampleForm(projects[selectedProjectIndex],${si})">✎ Edit parameters</button>`;
+  openModal(`<span class="tag ${laser?'laser':'chem'}">${laser?'LASER':'CHEM'}</span> ${esc(sm.label)}`,body);
+}
+
+/* modal: photos / files for a sample */
+function showFiles(p,si){
+  const sm=p.data.samples[si];
+  openModal(`<span class="tag file">FILES</span> ${esc(sm.label)}`,`
+    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:12px">
+      <input type="file" id="fileIn_${si}" multiple style="flex:1;min-width:200px">
+      <select id="fileType_${si}" style="width:auto">
+        <option value="photo">Photo</option><option value="drawing">Drawing</option><option value="report">Report</option>
+      </select>
+      <button class="btn btn-blue" id="up_${si}">Upload</button>
+    </div>
+    <div class="gallery" id="gal_${si}"></div>`);
+  document.getElementById('up_'+si).onclick=()=>doUpload(p,si);
+  renderGallery(p,si);
+}
+
 function kv(k,v){return `<div class="row"><span class="k">${k}</span><span class="v">${v!==undefined&&v!==''&&v!==null?esc(String(v)):'—'}</span></div>`;}
 function kvu(k,v,u){const has=v!==undefined&&v!==''&&v!==null;return `<div class="row"><span class="k">${k}</span><span class="v">${has?esc(String(v))+(u?' '+esc(u):''):'—'}</span></div>`;}
 
@@ -1528,8 +1668,7 @@ async function doUpload(p,si){
     }
     await saveProject(p);
     renderGallery(p,si);
-    const sub=document.querySelector(`#sb_${si}`).closest('.sample-card').querySelector('.sub');
-    if(sub)sub.textContent=`${s.material||'—'} · ${s.files.length} files`;
+    renderSamples(p);            // refresh the file-count bubble on the tile
     toast('Uploaded to '+s.label+' folder');
     inp.value='';
   }catch(e){toast('Upload error: '+e.message,true);}
