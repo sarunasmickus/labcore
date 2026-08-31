@@ -320,11 +320,11 @@
 
   /* ---- SAMPLE TILES ---- */
   .sgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:12px}
-  .stile{border:1px solid var(--line);border-radius:10px;padding:13px 14px;background:#fff;
+  .stile{border:1px solid var(--line);border-radius:10px;padding:13px 14px;background:#fff;cursor:pointer;
     transition:.13s;display:flex;flex-direction:column;gap:10px}
   .stile:hover{box-shadow:var(--shadow-lg);border-color:var(--acc)}
-  .stile-name{font-size:14px;font-weight:800;line-height:1.3;cursor:pointer}
-  .stile-name:hover{color:var(--acc)}
+  .stile-name{font-size:14px;font-weight:800;line-height:1.3}
+  .stile:hover .stile-name{color:var(--acc)}
   .stile-sub{font-size:11px;color:var(--mute);margin-top:2px}
   .stile-btns{display:flex;gap:7px;margin-top:auto}
   .pbtn{width:34px;height:34px;border-radius:50%;display:grid;place-items:center;
@@ -1382,9 +1382,10 @@ function renderProject(){
 }
 
 /* ---------- modal helpers ---------- */
-function openModal(title,html){
+function openModal(title,html,wide){
   document.getElementById('modalTitle').innerHTML=title;
   document.getElementById('modalBody').innerHTML=html;
+  document.querySelector('#modalBg .modal').style.maxWidth=wide?'900px':'640px';
   document.getElementById('modalBg').classList.add('open');
 }
 function closeModal(){document.getElementById('modalBg').classList.remove('open');}
@@ -1581,7 +1582,7 @@ function renderSamples(p){
     el.className='stile';
     el.innerHTML=`
       <div>
-        <div class="stile-name" title="Edit sample">${esc(sm.label)}</div>
+        <div class="stile-name">${esc(sm.label)}</div>
         <div class="stile-sub">${esc(sm.material||'no material')}</div>
       </div>
       <div class="stile-btns">
@@ -1589,11 +1590,12 @@ function renderSamples(p){
         <button class="pbtn chem${hasChem?' filled':''}" title="Chemical parameters">C</button>
         <button class="pbtn files${nFiles?' filled':''}" title="Photos &amp; files">${nFiles||'0'}</button>
       </div>`;
+    // whole tile opens the full overview; the small buttons are shortcuts
+    el.onclick=()=>showSample(p,si);
     const [bL,bC,bF]=el.querySelectorAll('.pbtn');
-    bL.onclick=()=>showParams(p,si,'laser');
-    bC.onclick=()=>showParams(p,si,'chem');
-    bF.onclick=()=>showFiles(p,si);
-    el.querySelector('.stile-name').onclick=()=>openSampleForm(p,si);
+    bL.onclick=e=>{e.stopPropagation();showParams(p,si,'laser');};
+    bC.onclick=e=>{e.stopPropagation();showParams(p,si,'chem');};
+    bF.onclick=e=>{e.stopPropagation();showFiles(p,si);};
     grid.appendChild(el);
   });
 }
@@ -1603,9 +1605,8 @@ function hasValues(o){
   return Object.keys(o).some(k=>!k.endsWith('_u')&&o[k]!==''&&o[k]!==undefined&&o[k]!==null);
 }
 
-/* modal: show one parameter set for a sample */
-function showParams(p,si,which){
-  const sm=p.data.samples[si];
+/* rows for a parameter group, reused by both modals */
+function paramRows(sm,which){
   const laser=which==='laser';
   const s=laser?(sm.laser||{}):(sm.chem||{});
   const rows=laser?[
@@ -1620,9 +1621,75 @@ function showParams(p,si,which){
     ['Current density',s.current,s.current_u],['Duration',s.duration,s.duration_u],
     ['Process',s.process],['Notes',s.notes]
   ];
-  const body=rows.map(([k,v,u])=>kvu(k,v,u)).join('')+
-    `<button class="btn btn-acc" style="margin-top:16px;width:100%"
-       onclick="closeModal();openSampleForm(projects[selectedProjectIndex],${si})">✎ Edit parameters</button>`;
+  return rows.map(([k,v,u])=>kvu(k,v,u)).join('');
+}
+
+/* ---------- FULL SAMPLE OVERVIEW (click the tile) ---------- */
+function showSample(p,si){
+  const sm=p.data.samples[si];
+  const files=sm.files||[];
+  const photos=files.filter(f=>f.type==='photo');
+  const others=files.filter(f=>f.type!=='photo');
+  const thumbs=files.length?`
+    <div class="gallery" style="margin-top:4px">
+      ${files.map(f=>`
+        <div class="fcard">
+          ${f.thumb?`<img src="${f.thumb}" referrerpolicy="no-referrer" onerror="this.style.display='none'">`:''}
+          <div class="fmeta"><div class="ftype">${esc((f.type||'file').toUpperCase())}</div>
+          <a href="${f.link}" target="_blank">${esc(f.name)}</a></div>
+        </div>`).join('')}
+    </div>`
+    :'<div class="empty-note" style="padding:14px">No photos or files uploaded for this sample yet.</div>';
+
+  openModal(`<span class="tag file">SAMPLE</span> ${esc(sm.label)}
+      <span style="font-weight:500;color:var(--mute);font-size:13px">${esc(sm.material||'')}</span>`,
+    `<div class="subgrid" style="gap:16px">
+       <div>
+         <h3 style="font-size:12px;letter-spacing:1.3px;text-transform:uppercase;margin-bottom:10px">
+           <span class="tag laser">LASER</span> Parameters</h3>
+         ${paramRows(sm,'laser')}
+       </div>
+       <div>
+         <h3 style="font-size:12px;letter-spacing:1.3px;text-transform:uppercase;margin-bottom:10px">
+           <span class="tag chem">CHEM</span> Parameters</h3>
+         ${paramRows(sm,'chem')}
+       </div>
+     </div>
+
+     <h3 style="font-size:12px;letter-spacing:1.3px;text-transform:uppercase;margin:20px 0 4px">
+       <span class="tag file">FILES</span> ${files.length} item(s)${photos.length?` · ${photos.length} photo(s)`:''}${others.length?` · ${others.length} other`:''}</h3>
+     ${thumbs}
+
+     <div style="display:flex;gap:9px;flex-wrap:wrap;margin-top:20px">
+       <button class="btn btn-acc" onclick="closeModal();openSampleForm(projects[selectedProjectIndex],${si})">✎ Edit sample</button>
+       <button class="btn btn-blue" onclick="openSampleFolder(projects[selectedProjectIndex],${si})">📁 Open photos folder</button>
+       <button class="btn btn-out" onclick="showFiles(projects[selectedProjectIndex],${si})">⬆ Upload files</button>
+     </div>`,true);
+}
+
+/* open (creating if needed) the sample's Drive folder in a new tab */
+async function openSampleFolder(p,si){
+  const sm=p.data.samples[si];
+  try{
+    let fid=sm.folderId;
+    if(!fid){
+      fid=await ensureSubfolder('Sample_'+sm.label.replace(/[^\w-]+/g,'_'),p.folderId);
+      sm.folderId=fid; await saveProject(p);
+    }
+    window.open('https://drive.google.com/drive/folders/'+fid,'_blank');
+  }catch(e){ toast('Could not open folder: '+(e.message||e),true); }
+}
+
+/* modal: show one parameter set for a sample */
+function showParams(p,si,which){
+  const sm=p.data.samples[si];
+  const laser=which==='laser';
+  const body=paramRows(sm,which)+
+    `<div style="display:flex;gap:9px;margin-top:16px">
+       <button class="btn btn-acc" style="flex:1"
+         onclick="closeModal();openSampleForm(projects[selectedProjectIndex],${si})">✎ Edit parameters</button>
+       <button class="btn btn-out" onclick="showSample(projects[selectedProjectIndex],${si})">View all</button>
+     </div>`;
   openModal(`<span class="tag ${laser?'laser':'chem'}">${laser?'LASER':'CHEM'}</span> ${esc(sm.label)}`,body);
 }
 
