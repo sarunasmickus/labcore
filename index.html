@@ -263,6 +263,27 @@
   .dl-today{background:#fdeceb;color:#b42318}        /* today/tomorrow */
   .dl-over{background:#b42318;color:#fff}            /* overdue   */
 
+  /* completed project — whole tile goes green */
+  .tile.done{background:#f0fdf4;border-color:#a7f3c4;border-left-color:#12b76a}
+  .tile.done:hover{background:#e9fbef}
+  .tile.done h3{color:#046c4e}
+  .done-badge{display:inline-flex;align-items:center;gap:5px;font-size:10px;font-weight:800;
+    letter-spacing:.6px;background:#12b76a;color:#fff;padding:3px 9px;border-radius:20px}
+
+  /* ---- FORM SECTIONS ---- */
+  .fsec{background:var(--panel);border:1px solid var(--line);border-radius:12px;
+    padding:22px;margin-bottom:18px;box-shadow:var(--shadow)}
+  .fsec-head{display:flex;align-items:center;gap:11px;margin-bottom:18px;
+    padding-bottom:13px;border-bottom:1px solid var(--line)}
+  .fsec-num{width:26px;height:26px;border-radius:50%;background:var(--acc);color:#fff;
+    display:grid;place-items:center;font-size:13px;font-weight:800;flex-shrink:0}
+  .fsec-head h3{font-size:15px;font-weight:800;letter-spacing:0;text-transform:none;margin:0}
+  .fsec-head .hint{font-size:12px;color:var(--mute);margin-left:auto;font-weight:600}
+  .req{color:var(--warn);margin-left:3px;font-weight:800}
+  .invalid{border-color:var(--warn)!important;background:#fffafa}
+  .errmsg{color:var(--warn);font-size:12px;font-weight:700;margin-top:6px;display:none}
+  .errmsg.show{display:block}
+
   .tilebar{display:flex;justify-content:space-between;align-items:center;gap:14px;margin-bottom:22px;flex-wrap:wrap}
   .tilebar h2{font-size:24px;font-weight:900;letter-spacing:-.4px}
   .filterbar{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
@@ -841,7 +862,10 @@ function tileHtml(d){
   return `
     <div class="tile-top">
       <h3>${esc(d.name)}</h3>
-      ${people.length?bubblesHtml(people,3):''}
+      <span style="display:flex;align-items:center;gap:7px;flex-shrink:0">
+        ${st==='done'?'<span class="done-badge">✓ DONE</span>':''}
+        ${people.length?bubblesHtml(people,3):''}
+      </span>
     </div>
     ${d.description?`<div class="tile-desc">${esc(d.description)}</div>`:''}
     <div class="tile-foot">
@@ -894,7 +918,7 @@ function drawTiles(){
     if(!items.length){body.innerHTML='<div class="col-empty">None</div>';return;}
     items.forEach(({p,i})=>{
       const el=document.createElement('div');
-      el.className=`tile tile-l-${lv.toLowerCase()}`;
+      el.className=`tile tile-l-${lv.toLowerCase()}`+((p.data.status||'active')==='done'?' done':'');
       el.innerHTML=tileHtml(p.data);
       el.onclick=()=>{selectedProjectIndex=i;renderProject();};
       body.appendChild(el);
@@ -905,60 +929,136 @@ function drawTiles(){
 /* ---------- New project ---------- */
 document.getElementById('newProjectBtn').onclick=()=>{
   document.getElementById('mainView').innerHTML=`
-   <div class="crumb mono">NEW / PROJECT</div>
+   <div class="crumb mono"><a href="#" onclick="goProjects();return false" style="color:var(--acc);text-decoration:none">← ALL PROJECTS</a> / NEW PROJECT</div>
    <div class="toolbar"><h2>Create Project</h2></div>
-   <div class="panelbox" style="max-width:640px">
-     <div class="field"><label>Project name *</label><input id="np_name" placeholder="e.g. Titanium Surface Texturing Batch 12"></div>
-     <div class="two">
-       <div class="field"><label>Status</label>
-         <select id="np_status"><option value="active">Active</option><option value="done">Completed</option><option value="archived">Archived</option></select>
-       </div>
-       <div class="field"><label>Priority</label>
-         <select id="np_priority"><option value="Low">Low</option><option value="Medium" selected>Medium</option><option value="High">High</option><option value="Urgent">Urgent</option></select>
-       </div>
-     </div>
-     <div class="field"><label>Deadline</label><input type="date" id="np_deadline"></div>
-     <div class="field"><label>Description</label><textarea id="np_desc" rows="2" placeholder="Goal, context, operator…"></textarea></div>
+   <div style="max-width:760px">
 
-     <div class="field">
-       <label>People on this project</label>
-       <div id="np_peoplepick" class="people-pick"></div>
-       <div style="display:flex;gap:8px">
-         <input id="np_personinput" placeholder="Add a person by name" style="flex:1" onkeydown="if(event.key==='Enter'){event.preventDefault();addPersonToNew();}">
-         <button class="btn btn-out" type="button" onclick="addPersonToNew()" style="padding:11px 16px">+</button>
+     <!-- SECTION 1 — basics -->
+     <div class="fsec">
+       <div class="fsec-head">
+         <span class="fsec-num">1</span><h3>Project details</h3>
+         <span class="hint">all fields required</span>
        </div>
+       <div class="field">
+         <label>Project name<span class="req">*</span></label>
+         <input id="np_name" placeholder="e.g. Titanium Surface Texturing Batch 12">
+       </div>
+       <div class="three">
+         <div class="field"><label>Status<span class="req">*</span></label>
+           <select id="np_status">
+             <option value="" selected disabled>— choose —</option>
+             <option value="active">Active</option>
+             <option value="done">Completed</option>
+             <option value="archived">Archived</option>
+           </select>
+         </div>
+         <div class="field"><label>Priority<span class="req">*</span></label>
+           <select id="np_priority">
+             <option value="" selected disabled>— choose —</option>
+             <option value="Urgent">Urgent</option>
+             <option value="High">High</option>
+             <option value="Medium">Medium</option>
+             <option value="Low">Low</option>
+           </select>
+         </div>
+         <div class="field"><label>Deadline<span class="req">*</span></label>
+           <input type="date" id="np_deadline">
+         </div>
+       </div>
+       <div class="field">
+         <label>Description<span class="req">*</span></label>
+         <textarea id="np_desc" rows="3" placeholder="Goal, context, what this project is for…"></textarea>
+       </div>
+       <div class="errmsg" id="err1"></div>
      </div>
 
-     <div class="field">
-       <label>Tasks to do</label>
-       <div style="display:flex;gap:8px;margin-bottom:8px">
-         <input id="np_taskinput" placeholder="Task description" style="flex:1" onkeydown="if(event.key==='Enter'){event.preventDefault();addTaskToNew();}">
-         <button class="btn btn-out" type="button" onclick="addTaskToNew()" style="padding:11px 16px">+</button>
+     <!-- SECTION 2 — people & tasks -->
+     <div class="fsec">
+       <div class="fsec-head">
+         <span class="fsec-num">2</span><h3>People &amp; tasks</h3>
+         <span class="hint">at least one person</span>
        </div>
-       <div id="np_tasklist" class="tasklist"></div>
+       <div class="field">
+         <label>People on this project<span class="req">*</span></label>
+         <div id="np_peoplepick" class="people-pick"></div>
+         <div style="display:flex;gap:8px">
+           <input id="np_personinput" placeholder="Add a person by name" style="flex:1" onkeydown="if(event.key==='Enter'){event.preventDefault();addPersonToNew();}">
+           <button class="btn btn-out" type="button" onclick="addPersonToNew()" style="padding:11px 16px">+</button>
+         </div>
+       </div>
+       <div class="field" style="margin-bottom:0">
+         <label>Tasks to do <span style="text-transform:none;letter-spacing:0;font-weight:400">(optional)</span></label>
+         <div style="display:flex;gap:8px;margin-bottom:8px">
+           <input id="np_taskinput" placeholder="Task description" style="flex:1" onkeydown="if(event.key==='Enter'){event.preventDefault();addTaskToNew();}">
+           <button class="btn btn-out" type="button" onclick="addTaskToNew()" style="padding:11px 16px">+</button>
+         </div>
+         <div id="np_tasklist" class="tasklist"></div>
+       </div>
+       <div class="errmsg" id="err2"></div>
      </div>
 
-     <div class="field">
-       <label>Drawings (uploaded to project folder on create)</label>
+     <!-- SECTION 3 — files -->
+     <div class="fsec">
+       <div class="fsec-head">
+         <span class="fsec-num">3</span><h3>Drawings &amp; reference files</h3>
+         <span class="hint">optional</span>
+       </div>
+       <p style="color:var(--mute);font-size:13px;line-height:1.6;margin-bottom:12px">
+         Drawings, photos, specifications or any documents describing this project.
+         They are uploaded to the project's <code>Drawings</code> folder in Drive.
+       </p>
        <input type="file" id="np_drawings" multiple>
+       <div id="np_filelist" style="margin-top:10px;font-size:13px;color:var(--mute)"></div>
      </div>
 
-     <button class="btn btn-acc" id="np_save">Create Project</button>
+     <button class="btn btn-acc" id="np_save" style="min-width:190px">Create Project</button>
    </div>`;
   window._newTasks=[];
   window._newPeople=[];
   renderNewTasks();
   renderNewPeople();
+  // show chosen filenames
+  document.getElementById('np_drawings').onchange=(e)=>{
+    const f=[...e.target.files];
+    document.getElementById('np_filelist').innerHTML=
+      f.length?`${f.length} file(s): `+f.map(x=>esc(x.name)).join(', '):'';
+  };
   document.getElementById('np_save').onclick=async()=>{
-    const name=document.getElementById('np_name').value.trim();
-    if(!name){toast('Name required',true);return;}
+    // ---- validation: every required field must be filled ----
+    const g=id=>document.getElementById(id);
+    ['np_name','np_status','np_priority','np_deadline','np_desc'].forEach(id=>g(id).classList.remove('invalid'));
+    g('err1').classList.remove('show'); g('err2').classList.remove('show');
+
+    const name=g('np_name').value.trim();
+    const status=g('np_status').value;
+    const priority=g('np_priority').value;
+    const deadline=g('np_deadline').value;
+    const desc=g('np_desc').value.trim();
+    const missing=[];
+    if(!name){missing.push('project name');g('np_name').classList.add('invalid');}
+    if(!status){missing.push('status');g('np_status').classList.add('invalid');}
+    if(!priority){missing.push('priority');g('np_priority').classList.add('invalid');}
+    if(!deadline){missing.push('deadline');g('np_deadline').classList.add('invalid');}
+    if(!desc){missing.push('description');g('np_desc').classList.add('invalid');}
+    if(missing.length){
+      g('err1').textContent='Please fill in: '+missing.join(', ')+'.';
+      g('err1').classList.add('show');
+      g('err1').scrollIntoView({behavior:'smooth',block:'center'});
+      toast('Section 1 is incomplete',true);
+      return;
+    }
+    if(!(window._newPeople||[]).length){
+      g('err2').textContent='Add at least one person to this project.';
+      g('err2').classList.add('show');
+      g('err2').scrollIntoView({behavior:'smooth',block:'center'});
+      toast('Section 2: add at least one person',true);
+      return;
+    }
+
     const btn=document.getElementById('np_save');btn.innerHTML='<span class="loader"></span> Creating…';
     try{
       const folderId=await createFolder('PRJ_'+name.replace(/[^\w]+/g,'_').slice(0,40),rootFolderId);
-      const data={name,status:document.getElementById('np_status').value,
-        priority:document.getElementById('np_priority').value,
-        deadline:document.getElementById('np_deadline').value||'',
-        description:document.getElementById('np_desc').value,
+      const data={name,status,priority,deadline,description:desc,
         people:(window._newPeople||[]).slice(),
         tasks:(window._newTasks||[]).map(t=>({text:t.text,done:false})),
         drawings:[],
