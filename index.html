@@ -284,6 +284,30 @@
   .errmsg{color:var(--warn);font-size:12px;font-weight:700;margin-top:6px;display:none}
   .errmsg.show{display:block}
 
+  /* ---- CREATE PROJECT: 2x2 grid, fits one screen ---- */
+  .np-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px;align-items:stretch}
+  @media(max-width:1000px){.np-grid{grid-template-columns:1fr}}
+  .np-grid .fsec{margin-bottom:0;padding:16px 18px;display:flex;flex-direction:column;min-height:0}
+  .np-grid .fsec-head{margin-bottom:12px;padding-bottom:10px}
+  .np-grid .fsec-num{width:23px;height:23px;font-size:12px}
+  .np-grid .fsec-head h3{font-size:14px}
+  .np-grid .field{margin-bottom:10px}
+  .np-grid label{font-size:10px;margin-bottom:4px}
+  .np-grid input,.np-grid select,.np-grid textarea{padding:8px 11px;font-size:13px}
+  .np-grid .people-pick{margin-bottom:7px;max-height:88px;overflow-y:auto}
+  .np-grid .tasklist{max-height:104px;overflow-y:auto}
+  .np-grid .taskrow{padding:6px 10px;font-size:13px}
+  .np-grid .pchip{padding:3px 10px 3px 4px;font-size:12px}
+  .np-scroll{overflow-y:auto;min-height:0}
+
+  /* summary / create cell */
+  .np-sum{display:flex;flex-direction:column;gap:9px;font-size:13px}
+  .sumrow{display:flex;justify-content:space-between;gap:10px;padding:6px 0;border-bottom:1px dashed var(--line)}
+  .sumrow .k{color:var(--mute)}
+  .sumrow .v{font-weight:700;text-align:right}
+  .sum-miss{color:var(--warn);font-weight:700}
+  .sum-ok{color:#12b76a;font-weight:700}
+
   .tilebar{display:flex;justify-content:space-between;align-items:center;gap:14px;margin-bottom:22px;flex-wrap:wrap}
   .tilebar h2{font-size:24px;font-weight:900;letter-spacing:-.4px}
   .filterbar{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
@@ -930,18 +954,18 @@ function drawTiles(){
 document.getElementById('newProjectBtn').onclick=()=>{
   document.getElementById('mainView').innerHTML=`
    <div class="crumb mono"><a href="#" onclick="goProjects();return false" style="color:var(--acc);text-decoration:none">← ALL PROJECTS</a> / NEW PROJECT</div>
-   <div class="toolbar"><h2>Create Project</h2></div>
-   <div style="max-width:760px">
+   <div class="toolbar" style="margin-bottom:14px"><h2>Create Project</h2></div>
+   <div class="np-grid">
 
-     <!-- SECTION 1 — basics -->
+     <!-- 1 — basics -->
      <div class="fsec">
        <div class="fsec-head">
          <span class="fsec-num">1</span><h3>Project details</h3>
-         <span class="hint">all fields required</span>
+         <span class="hint">required</span>
        </div>
        <div class="field">
          <label>Project name<span class="req">*</span></label>
-         <input id="np_name" placeholder="e.g. Titanium Surface Texturing Batch 12">
+         <input id="np_name" placeholder="e.g. Ti Surface Texturing Batch 12">
        </div>
        <div class="three">
          <div class="field"><label>Status<span class="req">*</span></label>
@@ -965,64 +989,78 @@ document.getElementById('newProjectBtn').onclick=()=>{
            <input type="date" id="np_deadline">
          </div>
        </div>
-       <div class="field">
+       <div class="field" style="margin-bottom:0">
          <label>Description<span class="req">*</span></label>
          <textarea id="np_desc" rows="3" placeholder="Goal, context, what this project is for…"></textarea>
        </div>
        <div class="errmsg" id="err1"></div>
      </div>
 
-     <!-- SECTION 2 — people & tasks -->
+     <!-- 2 — people & tasks -->
      <div class="fsec">
        <div class="fsec-head">
          <span class="fsec-num">2</span><h3>People &amp; tasks</h3>
-         <span class="hint">at least one person</span>
+         <span class="hint">1+ person</span>
        </div>
        <div class="field">
-         <label>People on this project<span class="req">*</span></label>
+         <label>People<span class="req">*</span></label>
          <div id="np_peoplepick" class="people-pick"></div>
-         <div style="display:flex;gap:8px">
-           <input id="np_personinput" placeholder="Add a person by name" style="flex:1" onkeydown="if(event.key==='Enter'){event.preventDefault();addPersonToNew();}">
-           <button class="btn btn-out" type="button" onclick="addPersonToNew()" style="padding:11px 16px">+</button>
+         <div style="display:flex;gap:7px">
+           <input id="np_personinput" placeholder="Add person" style="flex:1" onkeydown="if(event.key==='Enter'){event.preventDefault();addPersonToNew();}">
+           <button class="btn btn-out" type="button" onclick="addPersonToNew()" style="padding:8px 14px">+</button>
          </div>
        </div>
        <div class="field" style="margin-bottom:0">
-         <label>Tasks to do <span style="text-transform:none;letter-spacing:0;font-weight:400">(optional)</span></label>
-         <div style="display:flex;gap:8px;margin-bottom:8px">
+         <label>Tasks <span style="text-transform:none;letter-spacing:0;font-weight:400">(optional)</span></label>
+         <div style="display:flex;gap:7px;margin-bottom:7px">
            <input id="np_taskinput" placeholder="Task description" style="flex:1" onkeydown="if(event.key==='Enter'){event.preventDefault();addTaskToNew();}">
-           <button class="btn btn-out" type="button" onclick="addTaskToNew()" style="padding:11px 16px">+</button>
+           <button class="btn btn-out" type="button" onclick="addTaskToNew()" style="padding:8px 14px">+</button>
          </div>
          <div id="np_tasklist" class="tasklist"></div>
        </div>
        <div class="errmsg" id="err2"></div>
      </div>
 
-     <!-- SECTION 3 — files -->
+     <!-- 3 — files -->
      <div class="fsec">
        <div class="fsec-head">
-         <span class="fsec-num">3</span><h3>Drawings &amp; reference files</h3>
+         <span class="fsec-num">3</span><h3>Drawings &amp; files</h3>
          <span class="hint">optional</span>
        </div>
-       <p style="color:var(--mute);font-size:13px;line-height:1.6;margin-bottom:12px">
+       <p style="color:var(--mute);font-size:12px;line-height:1.5;margin-bottom:10px">
          Drawings, photos, specifications or any documents describing this project.
-         They are uploaded to the project's <code>Drawings</code> folder in Drive.
+         Uploaded to the project's <code>Drawings</code> folder.
        </p>
        <input type="file" id="np_drawings" multiple>
-       <div id="np_filelist" style="margin-top:10px;font-size:13px;color:var(--mute)"></div>
+       <div id="np_filelist" style="margin-top:9px;font-size:12px;color:var(--mute);overflow-y:auto;max-height:90px"></div>
      </div>
 
-     <button class="btn btn-acc" id="np_save" style="min-width:190px">Create Project</button>
+     <!-- 4 — summary & create -->
+     <div class="fsec">
+       <div class="fsec-head">
+         <span class="fsec-num">✓</span><h3>Review &amp; create</h3>
+       </div>
+       <div class="np-sum" id="np_summary"></div>
+       <button class="btn btn-acc" id="np_save" style="width:100%;margin-top:auto">Create Project</button>
+     </div>
+
    </div>`;
   window._newTasks=[];
   window._newPeople=[];
   renderNewTasks();
   renderNewPeople();
-  // show chosen filenames
+  // live summary
+  ['np_name','np_status','np_priority','np_deadline','np_desc'].forEach(id=>{
+    const el=document.getElementById(id);
+    el.oninput=updateNewSummary; el.onchange=updateNewSummary;
+  });
   document.getElementById('np_drawings').onchange=(e)=>{
     const f=[...e.target.files];
     document.getElementById('np_filelist').innerHTML=
-      f.length?`${f.length} file(s): `+f.map(x=>esc(x.name)).join(', '):'';
+      f.length?`<b>${f.length} file(s):</b> `+f.map(x=>esc(x.name)).join(', '):'';
+    updateNewSummary();
   };
+  updateNewSummary();
   document.getElementById('np_save').onclick=async()=>{
     // ---- validation: every required field must be filled ----
     const g=id=>document.getElementById(id);
@@ -1086,14 +1124,37 @@ function addTaskToNew(){
   const inp=document.getElementById('np_taskinput');
   const v=inp.value.trim();if(!v)return;
   window._newTasks.push({text:v});
-  inp.value='';inp.focus();renderNewTasks();
+  inp.value='';inp.focus();renderNewTasks();updateNewSummary();
 }
+/* --- live summary in the create form's 4th cell --- */
+function updateNewSummary(){
+  const el=document.getElementById('np_summary'); if(!el)return;
+  const g=id=>{const e=document.getElementById(id);return e?e.value.trim():'';};
+  const name=g('np_name'),status=g('np_status'),prio=g('np_priority'),
+        dl=g('np_deadline'),desc=g('np_desc');
+  const people=(window._newPeople||[]).length;
+  const tasks=(window._newTasks||[]).length;
+  const filesEl=document.getElementById('np_drawings');
+  const files=filesEl&&filesEl.files?filesEl.files.length:0;
+  const val=(v,label)=>v?`<span class="v">${esc(label||v)}</span>`:'<span class="v sum-miss">missing</span>';
+  const dlTxt=dl?deadlineInfo(dl).label:'';
+  el.innerHTML=`
+    <div class="sumrow"><span class="k">Name</span>${val(name)}</div>
+    <div class="sumrow"><span class="k">Status</span>${val(status,status?status:'')}</div>
+    <div class="sumrow"><span class="k">Priority</span>${val(prio)}</div>
+    <div class="sumrow"><span class="k">Deadline</span>${val(dl,dlTxt)}</div>
+    <div class="sumrow"><span class="k">Description</span>${val(desc,desc?'✓ added':'')}</div>
+    <div class="sumrow"><span class="k">People</span>${people?`<span class="v sum-ok">${people}</span>`:'<span class="v sum-miss">none</span>'}</div>
+    <div class="sumrow"><span class="k">Tasks</span><span class="v">${tasks||'—'}</span></div>
+    <div class="sumrow" style="border:none"><span class="k">Files</span><span class="v">${files||'—'}</span></div>`;
+}
+
 /* --- people picker for the new-project form --- */
 function addPersonToNew(){
   const inp=document.getElementById('np_personinput');
   const v=inp.value.trim(); if(!v)return;
   togglePerson(window._newPeople,v);
-  inp.value='';inp.focus();renderNewPeople();
+  inp.value='';inp.focus();renderNewPeople();updateNewSummary();
 }
 function renderNewPeople(){
   const el=document.getElementById('np_peoplepick'); if(!el)return;
@@ -1105,7 +1166,7 @@ function renderNewPeople(){
     const b=document.createElement('button');
     b.type='button'; b.className='pchip on';
     b.innerHTML=`${bubHtml(n,true)}${esc(n)}<span class="x">✕</span>`;
-    b.onclick=()=>{togglePerson(window._newPeople,n);renderNewPeople();};
+    b.onclick=()=>{togglePerson(window._newPeople,n);renderNewPeople();updateNewSummary();};
     el.appendChild(b);
   });
   if(suggestions.length){
@@ -1118,7 +1179,7 @@ function renderNewPeople(){
       const b=document.createElement('button');
       b.type='button'; b.className='pchip';
       b.innerHTML=`${bubHtml(n,true)}${esc(n)}`;
-      b.onclick=()=>{togglePerson(window._newPeople,n);renderNewPeople();};
+      b.onclick=()=>{togglePerson(window._newPeople,n);renderNewPeople();updateNewSummary();};
       el.appendChild(b);
     });
   }else if(!chosen.length){
@@ -1129,7 +1190,7 @@ function renderNewTasks(){
   const el=document.getElementById('np_tasklist');
   el.innerHTML=(window._newTasks||[]).map((t,i)=>
     `<div class="taskrow"><span>${esc(t.text)}</span>
-     <button class="taskdel" onclick="window._newTasks.splice(${i},1);renderNewTasks()">✕</button></div>`).join('')
+     <button class="taskdel" onclick="window._newTasks.splice(${i},1);renderNewTasks();updateNewSummary()">✕</button></div>`).join('')
     ||'<div class="empty-note" style="padding:10px">No tasks added.</div>';
 }
 
