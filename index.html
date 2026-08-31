@@ -381,6 +381,16 @@
   .chipx{position:absolute;right:6px;top:50%;transform:translateY(-50%);color:var(--mute);font-size:13px;line-height:1}
   .chipx:hover{color:var(--warn)}
 
+  .sugbox{position:absolute;left:0;right:0;top:100%;margin-top:4px;background:#fff;
+    border:1px solid var(--line);border-radius:8px;box-shadow:var(--shadow-lg);
+    z-index:60;max-height:260px;overflow-y:auto}
+  .sug{padding:9px 12px;border-bottom:1px solid var(--line);cursor:pointer;font-size:13px}
+  .sug:last-child{border-bottom:none}
+  .sug:hover{background:#eef3fe}
+  .sug-w{font-size:11px;color:var(--mute);margin-left:7px;font-weight:600}
+  .sug-s{font-size:11px;color:var(--mute);margin-top:3px}
+  .sug-n{color:var(--acc);font-weight:700;margin-left:6px}
+
   .shdr,.srow{display:grid;grid-template-columns:52px minmax(0,1fr) 58px 64px 34px 64px 30px;
     gap:6px;align-items:center}
   .shdr{font-size:10px;letter-spacing:.8px;text-transform:uppercase;color:var(--mute);
@@ -1945,7 +1955,7 @@ function renderProject(){
       <div class="panelbox span2">
         <div class="panel-head">
           <h3><span class="tag laser">SAMPLES</span> ${d.samples.length} in this project</h3>
-          <button class="btn btn-out" style="padding:7px 14px;font-size:12px" onclick="openSampleForm(projects[selectedProjectIndex])">+ Add</button>
+          <button class="btn btn-out" style="padding:7px 14px;font-size:12px" onclick="newSampleForm(projects[selectedProjectIndex])">+ Add</button>
         </div>
         <div id="sampleArea"></div>
       </div>
@@ -1980,7 +1990,7 @@ function renderProject(){
 
     </div>`;
   document.getElementById('editProjectBtn').onclick=()=>openProjectEdit(p);
-  document.getElementById('addSampleBtn').onclick=()=>openSampleForm(p);
+  document.getElementById('addSampleBtn').onclick=()=>newSampleForm(p);
   document.getElementById('pj_drawup').onclick=()=>uploadDrawings(p);
   document.getElementById('pj_sync').onclick=()=>autoSync(p,true);
   renderProjectTasks(p);
@@ -2348,6 +2358,74 @@ function recDateFromSelects(){
   return `${yr}-${p2(mon+1)}-${p2(day)} ${p2(now.getHours())}:${p2(now.getMinutes())}`;
 }
 
+/* Every recipe LabCore already knows — from all projects' samples and the
+   master print log — used to autofill a new recipe from a similar one. */
+function allKnownRecipes(){
+  const out=[];
+  projects.forEach(pr=>(pr.data.samples||[]).forEach(sm=>{
+    if(sm.recipe&&(sm.recipe.rows||[]).length)
+      out.push({rec:sm.recipe,name:sm.recipe.sampleName||sm.label,
+                where:pr.data.name+' · '+sm.label,
+                when:sm.recipe.printedAt||sm.recipe.recipeDateTime||''});
+  }));
+  (printedLog||[]).forEach(e=>{
+    if(e.recipe&&(e.recipe.rows||[]).length)
+      out.push({rec:e.recipe,name:e.recipe.sampleName||e.sample,
+                where:(e.project||'')+' · '+(e.sample||'')+' (printed)',
+                when:e.printedAt||''});
+  });
+  // newest first, and drop exact duplicates of the same steps + name
+  out.sort((a,b)=>new Date(b.when||0)-new Date(a.when||0));
+  const seen=new Set(), uniq=[];
+  out.forEach(o=>{
+    const k=(o.name||'').toLowerCase()+'|'+JSON.stringify((o.rec.rows||[]).map(r=>[r.step,r.time,r.unit,r.us,r.temp]));
+    if(seen.has(k))return; seen.add(k); uniq.push(o);
+  });
+  return uniq;
+}
+function suggestRecipes(q){
+  const s=(q||'').trim().toLowerCase();
+  if(s.length<2)return [];
+  return allKnownRecipes().filter(o=>(o.name||'').toLowerCase().includes(s)).slice(0,8);
+}
+function onRecNameInput(){
+  const box=document.getElementById('er_suggest'); if(!box)return;
+  const q=document.getElementById('er_name').value;
+  const hits=suggestRecipes(q);
+  if(!hits.length){box.style.display='none';box.innerHTML='';return;}
+  box.innerHTML='';
+  hits.forEach((o,i)=>{
+    const steps=(o.rec.rows||[]).map(r=>r.step).filter(Boolean);
+    const row=document.createElement('div');
+    row.className='sug';
+    row.innerHTML=`<div><b>${esc(o.name)}</b>
+        <span class="sug-w">${esc(o.where)}</span></div>
+      <div class="sug-s">${esc(steps.slice(0,5).join(' → '))}${steps.length>5?' →…':''}
+        <span class="sug-n">${steps.length} step(s)</span></div>`;
+    row.onclick=()=>applySuggestion(i,q);
+    box.appendChild(row);
+  });
+  window._sugCache=hits;
+  box.style.display='';
+}
+function applySuggestion(i){
+  const o=(window._sugCache||[])[i]; if(!o)return;
+  const rec=window._editRec;
+  rec.rows=JSON.parse(JSON.stringify(o.rec.rows||[]));
+  rec.footer=o.rec.footer||rec.footer;
+  if(o.rec.logo)rec.logo=o.rec.logo;
+  rec.mode='chem';
+  const f=document.getElementById('er_footer'); if(f)f.value=rec.footer||'';
+  const lg=document.getElementById('er_logo'); if(lg&&rec.logo)lg.value=rec.logo;
+  setRecMode('chem'); drawRecRows();
+  document.getElementById('er_suggest').style.display='none';
+  toast('Filled '+(rec.rows.length)+' step(s) from "'+(o.name||'')+'"');
+}
+function closeSuggest(){
+  const b=document.getElementById('er_suggest');
+  if(b)setTimeout(()=>{b.style.display='none';},180);
+}
+
 function editRecipe(p,si){
   const sm=p.data.samples[si];
   window._editRec=JSON.parse(JSON.stringify(sm.recipe||blankRecipe(sm)));
@@ -2366,8 +2444,13 @@ function editRecipe(p,si){
       <div class="recedit-main">
 
         <div class="two">
-          <div class="field"><label>Sample name (printed)</label>
-            <input id="er_name" value="${esc(rec.sampleName||sm.label)}"></div>
+          <div class="field" style="position:relative">
+            <label>Sample name (printed)
+              <span style="text-transform:none;letter-spacing:0;font-weight:400">— type 2+ letters to reuse a past recipe</span></label>
+            <input id="er_name" autocomplete="off" value="${esc(rec.sampleName||sm.label)}"
+              oninput="onRecNameInput()" onfocus="onRecNameInput()" onblur="closeSuggest()">
+            <div id="er_suggest" class="sugbox" style="display:none"></div>
+          </div>
           <div class="field"><label>Date</label>
             <div style="display:flex;gap:6px">
               <select id="er_dy" style="flex:1">${days.map(d=>`<option${d===parsed.d?' selected':''}>${d}</option>`).join('')}</select>
@@ -2832,6 +2915,68 @@ async function doUpload(p,si){
 }
 
 /* ---------- Sample form (add / edit) ---------- */
+/* ---------- NEW SAMPLE: name, material and files only ----------
+   Laser parameters and the chemical recipe are added afterwards from
+   the sample's own buttons, so creating a sample stays quick.        */
+function newSampleForm(p){
+  openModal('<span class="tag laser">NEW SAMPLE</span> '+esc(p.data.name),`
+    <div class="field"><label>Sample label<span class="req">*</span></label>
+      <input id="ns_label" placeholder="S-01" autofocus></div>
+    <div class="field"><label>Material</label>
+      <input id="ns_material" placeholder="Ti-6Al-4V"></div>
+    <div class="field">
+      <label>Photos / files <span style="text-transform:none;letter-spacing:0;font-weight:400">(optional)</span></label>
+      <input type="file" id="ns_files" multiple>
+      <div id="ns_filelist" style="margin-top:8px;font-size:12px;color:var(--mute)"></div>
+    </div>
+    <p style="color:var(--mute);font-size:12px;line-height:1.6;margin-bottom:14px">
+      Laser parameters and the chemical recipe can be added afterwards from the sample's
+      <b>L</b> and <b>R</b> buttons.
+    </p>
+    <div style="display:flex;gap:9px">
+      <button class="btn btn-acc" style="flex:1" id="ns_save">Add sample</button>
+      <button class="btn btn-out" onclick="closeModal()">Cancel</button>
+    </div>
+    <div class="errmsg" id="ns_err"></div>`);
+  document.getElementById('ns_files').onchange=e=>{
+    const f=[...e.target.files];
+    document.getElementById('ns_filelist').innerHTML=
+      f.length?`<b>${f.length} file(s):</b> `+f.map(x=>esc(x.name)).join(', '):'';
+  };
+  document.getElementById('ns_label').onkeydown=e=>{
+    if(e.key==='Enter'){e.preventDefault();document.getElementById('ns_save').click();} };
+  document.getElementById('ns_save').onclick=async()=>{
+    const label=document.getElementById('ns_label').value.trim();
+    const err=document.getElementById('ns_err');
+    if(!label){err.textContent='A sample label is required.';err.classList.add('show');return;}
+    if(p.data.samples.some(x=>(x.label||'').toLowerCase()===label.toLowerCase())){
+      err.textContent='A sample with that label already exists in this project.';
+      err.classList.add('show');return;}
+    const btn=document.getElementById('ns_save');btn.innerHTML='<span class="loader"></span> Adding…';
+    try{
+      const sm={label,material:document.getElementById('ns_material').value.trim(),
+                laser:{},files:[],created:new Date().toISOString()};
+      const files=[...document.getElementById('ns_files').files];
+      if(files.length){
+        const folder=await ensureSubfolder('Sample_'+label.replace(/[^\w-]+/g,'_'),p.folderId);
+        sm.folderId=folder;
+        for(const f of files){
+          const r=await uploadFile(f,folder);
+          sm.files.push({id:r.id,name:r.name,type:inferType({mimeType:f.type,name:f.name}),
+                         link:r.webViewLink,thumb:r.thumbnailLink});
+        }
+      }
+      p.data.samples.push(sm);
+      await saveProject(p); await writeParamsExcel(p);
+      closeModal(); renderProject();
+      toast('Sample '+label+' added');
+    }catch(e){
+      err.textContent='Could not add the sample: '+(e.message||e);
+      err.classList.add('show'); btn.textContent='Add sample';
+    }
+  };
+}
+
 function openSampleForm(p,si){
   const editing=si!==undefined;
   const s=editing?p.data.samples[si]:{label:'',material:'',laser:{},chem:{},files:[]};
