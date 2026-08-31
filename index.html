@@ -613,6 +613,9 @@ function renderProjectList(){
   });
 }
 
+/* escape text for safe HTML insertion */
+function esc(s){return (s||'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
+
 /* ---------- Deadline helpers (date only, no time) ---------- */
 /* days remaining: negative = overdue, 0 = today */
 function daysUntil(dateStr){
