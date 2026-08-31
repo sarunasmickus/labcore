@@ -351,6 +351,12 @@
   .modal-x{background:transparent;font-size:20px;color:var(--mute);padding:2px 8px;border-radius:6px;line-height:1}
   .modal-x:hover{background:var(--panel2);color:var(--ink)}
 
+  .syncstate{display:inline-flex;align-items:center;gap:6px;font-size:11px;font-weight:700;
+    transition:opacity .4s;white-space:nowrap}
+  .syncstate.busy{color:var(--mute)}
+  .syncstate.ok{color:#12b76a}
+  .syncstate.err{color:var(--warn)}
+
   .tilebar{display:flex;justify-content:space-between;align-items:center;gap:14px;margin-bottom:22px;flex-wrap:wrap}
   .tilebar h2{font-size:24px;font-weight:900;letter-spacing:-.4px}
   .filterbar{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
@@ -681,7 +687,7 @@ async function syncSampleFiles(p,si,save){
     const changed=before!==after;
     if(changed&&save)await saveProject(p);
     return changed;
-  }catch(e){ console.warn('[LABCORE] sync failed for',sm.label,e); return false; }
+  }catch(e){ console.warn('[LABCORE] sync failed for',sm.label,e); syncErrors++; return false; }
 }
 /* same for the project-level Drawings folder */
 async function syncDrawings(p,save){
@@ -696,10 +702,12 @@ async function syncDrawings(p,save){
     const changed=before!==after;
     if(changed&&save)await saveProject(p);
     return changed;
-  }catch(e){ console.warn('[LABCORE] drawings sync failed',e); return false; }
+  }catch(e){ console.warn('[LABCORE] drawings sync failed',e); syncErrors++; return false; }
 }
+let syncErrors=0;
 /* refresh every sample + drawings for a project (batched) */
 async function syncProjectFiles(p,save){
+  syncErrors=0;
   let changed=await syncDrawings(p,false);
   const idx=p.data.samples.map((_,i)=>i);
   const BATCH=6;
@@ -1433,7 +1441,10 @@ function renderProject(){
       <!-- SPREADSHEET & FILES -->
       <div class="panelbox">
         <div class="panel-head"><h3><span class="tag chem">DATA</span> Spreadsheet &amp; files</h3>
-          <button class="btn btn-out" style="padding:6px 12px;font-size:12px" id="pj_sync" title="Re-read all files from Google Drive">⟳ Sync Drive</button>
+          <span style="display:flex;align-items:center;gap:9px">
+            <span id="pj_syncstate" class="syncstate"></span>
+            <button class="btn btn-out" style="padding:6px 12px;font-size:12px" id="pj_sync" title="Re-read all files from Google Drive">⟳ Sync</button>
+          </span>
         </div>
         ${d.excelLink
           ?`<a class="filelink" href="${d.excelLink}" target="_blank">📊 parameters.xlsx — open in Drive</a>`
@@ -1459,22 +1470,54 @@ function renderProject(){
   document.getElementById('editProjectBtn').onclick=()=>openProjectEdit(p);
   document.getElementById('addSampleBtn').onclick=()=>openSampleForm(p);
   document.getElementById('pj_drawup').onclick=()=>uploadDrawings(p);
-  document.getElementById('pj_sync').onclick=async(e)=>{
-    const b=e.target;b.innerHTML='<span class="loader"></span>';
-    await syncProjectFiles(p,true);
-    renderSamples(p);renderDrawings(p);
-    b.textContent='⟳ Sync Drive';toast('Files refreshed from Drive');
-  };
+  document.getElementById('pj_sync').onclick=()=>autoSync(p,true);
   renderProjectTasks(p);
   renderDrawings(p);
   renderSamples(p);
   // pick up anything uploaded straight into Drive since last time
-  syncProjectFiles(p,true).then(changed=>{
-    if(changed&&projects[selectedProjectIndex]===p){
-      renderSamples(p); renderDrawings(p);
-      toast('Files refreshed from Drive');
+  autoSync(p);
+}
+
+/* ---------- automatic Drive sync when a project is opened ----------
+   Skipped if the same project was synced moments ago, so the many
+   renderProject() calls after small edits don't hammer the Drive API. */
+const SYNC_TTL=20000;                 // ms before the same project re-syncs
+let lastSync={};                      // folderId -> timestamp
+async function autoSync(p,force){
+  const now=Date.now();
+  if(!force && lastSync[p.folderId] && now-lastSync[p.folderId]<SYNC_TTL){
+    setSyncState('ok','Up to date');
+    return;
+  }
+  lastSync[p.folderId]=now;
+  setSyncState('busy','Checking Drive…');
+  try{
+    const changed=await syncProjectFiles(p,true);
+    if(projects[selectedProjectIndex]!==p)return;   // user navigated away
+    if(syncErrors){
+      setSyncState('err',`Sync failed (${syncErrors})`);
+      lastSync[p.folderId]=0;          // allow an immediate retry
+      return;
     }
-  });
+    if(changed){
+      renderSamples(p); renderDrawings(p);
+      setSyncState('ok','Updated from Drive');
+      toast('New files found in Drive');
+    }else{
+      setSyncState('ok','Up to date');
+    }
+  }catch(e){
+    setSyncState('err','Sync failed');
+    console.warn('[LABCORE] autoSync',e);
+  }
+}
+function setSyncState(kind,text){
+  const el=document.getElementById('pj_syncstate'); if(!el)return;
+  const icon=kind==='busy'?'<span class="loader"></span>':(kind==='err'?'⚠':'✓');
+  el.className='syncstate '+kind;
+  el.innerHTML=`${icon} <span>${esc(text)}</span>`;
+  if(kind==='ok')setTimeout(()=>{if(el.classList.contains('ok'))el.style.opacity='.55';},2500);
+  else el.style.opacity='1';
 }
 
 /* ---------- modal helpers ---------- */
