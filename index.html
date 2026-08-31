@@ -956,7 +956,7 @@ function tileHtml(d){
     </div>
     ${d.description?`<div class="tile-desc">${esc(d.description)}</div>`:''}
     <div class="tile-foot">
-      <span class="dl ${dl.cls}">${dl.label}</span>
+      ${st==='done'?'':`<span class="dl ${dl.cls}">${dl.label}</span>`}
       <span class="tile-stats"><span class="status-dot st-${st}"></span>${d.samples?.length||0} samples${tasks.length?` · ${doneTasks}/${tasks.length} tasks`:''}</span>
     </div>`;
 }
@@ -1270,7 +1270,7 @@ function renderProject(){
     <div class="crumb mono"><a href="#" onclick="goProjects();return false" style="color:var(--acc);text-decoration:none">← ALL PROJECTS</a> / <b>${esc(d.name).toUpperCase()}</b></div>
     <div class="toolbar">
       <h2>${esc(d.name)} <span class="prio prio-${prio.toLowerCase()}">${prio}</span>
-        <span class="dl ${deadlineInfo(d.deadline).cls}" style="margin-left:8px;font-size:12px;vertical-align:middle">${deadlineInfo(d.deadline).label}</span></h2>
+        ${d.status==='done'?'<span class="done-badge" style="margin-left:8px;vertical-align:middle">✓ DONE</span>':`<span class="dl ${deadlineInfo(d.deadline).cls}" style="margin-left:8px;font-size:12px;vertical-align:middle">${deadlineInfo(d.deadline).label}</span>`}</h2>
       <div style="display:flex;gap:10px;flex-wrap:wrap">
         <select id="pj_priority" class="btn-out" style="padding:8px 12px;width:auto">
           ${['Low','Medium','High','Urgent'].map(x=>`<option${prio===x?' selected':''}>${x}</option>`).join('')}
