@@ -1567,7 +1567,14 @@ function renderSamples(p){
   }
   area.innerHTML='<div class="sgrid"></div>';
   const grid=area.querySelector('.sgrid');
-  p.data.samples.forEach((sm,si)=>{
+  // newest samples first (keep each sample's real index for editing)
+  const order=p.data.samples.map((sm,si)=>({sm,si})).sort((a,b)=>{
+    const ta=a.sm.created?Date.parse(a.sm.created):null;
+    const tb=b.sm.created?Date.parse(b.sm.created):null;
+    if(ta&&tb&&ta!==tb)return tb-ta;      // newer timestamp first
+    return b.si-a.si;                      // otherwise later in the list = newer
+  });
+  order.forEach(({sm,si})=>{
     const nFiles=(sm.files||[]).length;
     const hasLaser=hasValues(sm.laser), hasChem=hasValues(sm.chem);
     const el=document.createElement('div');
@@ -1749,6 +1756,7 @@ function openSampleForm(p,si){
         duration:v('c_dur'),duration_u:v('c_dur_u'),
         process:v('c_process'),notes:v('c_notes')},
       folderId:editing?s.folderId:undefined,
+      created:editing?(s.created||new Date().toISOString()):new Date().toISOString(),
       files:editing?(s.files||[]):[]
     };
     const btn=document.getElementById('saveS');btn.innerHTML='<span class="loader"></span>';
