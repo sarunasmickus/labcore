@@ -630,6 +630,87 @@ async function ensureSubfolder(name,parentId){
   if(r.result.files.length)return r.result.files[0].id;
   return await createFolder(name,parentId);
 }
+/* find a folder by name under a parent WITHOUT creating it (null if absent) */
+async function findSubfolder(name,parentId){
+  const safe=name.replace(/'/g,"\\'");
+  const r=await gapi.client.drive.files.list({
+    q:`name='${safe}' and mimeType='application/vnd.google-apps.folder' and '${parentId}' in parents and trashed=false`,
+    fields:'files(id)'});
+  return r.result.files.length?r.result.files[0].id:null;
+}
+/* list every real file (not folders) inside a Drive folder */
+async function listFolderFiles(folderId){
+  let out=[],pageToken=null;
+  do{
+    const r=await gapi.client.drive.files.list({
+      q:`'${folderId}' in parents and mimeType!='application/vnd.google-apps.folder' and trashed=false`,
+      fields:'nextPageToken, files(id,name,mimeType,webViewLink,thumbnailLink,createdTime)',
+      pageSize:1000,orderBy:'createdTime desc',pageToken:pageToken||undefined});
+    out=out.concat(r.result.files||[]);
+    pageToken=r.result.nextPageToken;
+  }while(pageToken);
+  return out;
+}
+/* guess a category for files that were uploaded straight into Drive */
+function inferType(f){
+  const m=(f.mimeType||'').toLowerCase(), n=(f.name||'').toLowerCase();
+  if(m.startsWith('image/'))return 'photo';
+  if(m.startsWith('video/'))return 'photo';
+  if(/\.(dwg|dxf|step|stp|iges|igs|stl|svg|ai)$/.test(n))return 'drawing';
+  if(m==='application/pdf'||/\.(pdf|docx?|txt|rtf|odt|xlsx?|csv|pptx?)$/.test(n))return 'report';
+  return 'drawing';
+}
+/* Make Drive the source of truth for a sample's files: read the sample folder
+   and rebuild the file list, keeping any category labels already chosen.
+   Returns true if anything changed. */
+async function syncSampleFiles(p,si,save){
+  const sm=p.data.samples[si];
+  try{
+    let fid=sm.folderId;
+    if(!fid){
+      fid=await findSubfolder('Sample_'+sm.label.replace(/[^\w-]+/g,'_'),p.folderId);
+      if(!fid)return false;                 // no folder in Drive yet
+      sm.folderId=fid;
+    }
+    const live=await listFolderFiles(fid);
+    const known={}; (sm.files||[]).forEach(f=>{if(f.id)known[f.id]=f.type;});
+    const before=JSON.stringify((sm.files||[]).map(f=>f.id).sort());
+    sm.files=live.map(f=>({id:f.id,name:f.name,
+      type:known[f.id]||inferType(f),link:f.webViewLink,thumb:f.thumbnailLink}));
+    const after=JSON.stringify(sm.files.map(f=>f.id).sort());
+    const changed=before!==after;
+    if(changed&&save)await saveProject(p);
+    return changed;
+  }catch(e){ console.warn('[LABCORE] sync failed for',sm.label,e); return false; }
+}
+/* same for the project-level Drawings folder */
+async function syncDrawings(p,save){
+  try{
+    const fid=await findSubfolder('Drawings',p.folderId);
+    if(!fid)return false;
+    const live=await listFolderFiles(fid);
+    const known={}; (p.data.drawings||[]).forEach(f=>{if(f.id)known[f.id]=true;});
+    const before=JSON.stringify((p.data.drawings||[]).map(f=>f.id).sort());
+    p.data.drawings=live.map(f=>({id:f.id,name:f.name,link:f.webViewLink,thumb:f.thumbnailLink}));
+    const after=JSON.stringify(p.data.drawings.map(f=>f.id).sort());
+    const changed=before!==after;
+    if(changed&&save)await saveProject(p);
+    return changed;
+  }catch(e){ console.warn('[LABCORE] drawings sync failed',e); return false; }
+}
+/* refresh every sample + drawings for a project (batched) */
+async function syncProjectFiles(p,save){
+  let changed=await syncDrawings(p,false);
+  const idx=p.data.samples.map((_,i)=>i);
+  const BATCH=6;
+  for(let i=0;i<idx.length;i+=BATCH){
+    const res=await Promise.all(idx.slice(i,i+BATCH).map(si=>syncSampleFiles(p,si,false)));
+    if(res.some(Boolean))changed=true;
+  }
+  if(changed&&save)await saveProject(p);
+  return changed;
+}
+
 /* find a file by exact name under a parent */
 async function findFile(name,parentId){
   const safe=name.replace(/'/g,"\\'");
@@ -1351,7 +1432,9 @@ function renderProject(){
 
       <!-- SPREADSHEET & FILES -->
       <div class="panelbox">
-        <div class="panel-head"><h3><span class="tag chem">DATA</span> Spreadsheet &amp; files</h3></div>
+        <div class="panel-head"><h3><span class="tag chem">DATA</span> Spreadsheet &amp; files</h3>
+          <button class="btn btn-out" style="padding:6px 12px;font-size:12px" id="pj_sync" title="Re-read all files from Google Drive">⟳ Sync Drive</button>
+        </div>
         ${d.excelLink
           ?`<a class="filelink" href="${d.excelLink}" target="_blank">📊 parameters.xlsx — open in Drive</a>`
           :'<div class="empty-note" style="padding:10px">Spreadsheet appears after the first sample is saved.</div>'}
@@ -1376,9 +1459,22 @@ function renderProject(){
   document.getElementById('editProjectBtn').onclick=()=>openProjectEdit(p);
   document.getElementById('addSampleBtn').onclick=()=>openSampleForm(p);
   document.getElementById('pj_drawup').onclick=()=>uploadDrawings(p);
+  document.getElementById('pj_sync').onclick=async(e)=>{
+    const b=e.target;b.innerHTML='<span class="loader"></span>';
+    await syncProjectFiles(p,true);
+    renderSamples(p);renderDrawings(p);
+    b.textContent='⟳ Sync Drive';toast('Files refreshed from Drive');
+  };
   renderProjectTasks(p);
   renderDrawings(p);
   renderSamples(p);
+  // pick up anything uploaded straight into Drive since last time
+  syncProjectFiles(p,true).then(changed=>{
+    if(changed&&projects[selectedProjectIndex]===p){
+      renderSamples(p); renderDrawings(p);
+      toast('Files refreshed from Drive');
+    }
+  });
 }
 
 /* ---------- modal helpers ---------- */
@@ -1626,6 +1722,12 @@ function paramRows(sm,which){
 
 /* ---------- FULL SAMPLE OVERVIEW (click the tile) ---------- */
 function showSample(p,si){
+  // refresh this sample's files from Drive, then redraw the modal if it changed
+  syncSampleFiles(p,si,true).then(changed=>{
+    if(changed&&document.getElementById('modalBg').classList.contains('open')){
+      showSample(p,si); renderSamples(p);
+    }
+  });
   const sm=p.data.samples[si];
   const files=sm.files||[];
   const photos=files.filter(f=>f.type==='photo');
@@ -1695,6 +1797,9 @@ function showParams(p,si,which){
 
 /* modal: photos / files for a sample */
 function showFiles(p,si){
+  syncSampleFiles(p,si,true).then(changed=>{
+    if(changed&&document.getElementById('gal_'+si)){renderGallery(p,si);renderSamples(p);}
+  });
   const sm=p.data.samples[si];
   openModal(`<span class="tag file">FILES</span> ${esc(sm.label)}`,`
     <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:12px">
