@@ -268,7 +268,8 @@
   <aside>
     <div class="sec-label">Projects</div>
     <button id="allProjectsBtn" class="btn btn-out" style="width:100%;margin-bottom:8px;display:none">⌂ All projects</button>
-    <button id="newProjectBtn" class="btn btn-acc" style="width:100%;margin-bottom:14px;display:none">+ New Project</button>
+    <button id="newProjectBtn" class="btn btn-acc" style="width:100%;margin-bottom:8px;display:none">+ New Project</button>
+    <button id="findBtn" class="btn btn-out" style="width:100%;margin-bottom:14px;display:none;font-size:12px">🔍 Find my projects</button>
     <div id="projectList" class="pjlist">
       <div class="empty-note">Connect Drive to load projects.</div>
     </div>
@@ -367,6 +368,8 @@ async function onConnected(){
   document.getElementById('newProjectBtn').style.display='block';
   document.getElementById('allProjectsBtn').style.display='block';
   document.getElementById('allProjectsBtn').onclick=()=>renderHome();
+  document.getElementById('findBtn').style.display='block';
+  document.getElementById('findBtn').onclick=()=>scanDrive();
   document.getElementById('loginState').style.display='none';
   try{
     const info=await gapi.client.request({path:'https://www.googleapis.com/oauth2/v2/userinfo'});
@@ -379,6 +382,15 @@ async function onConnected(){
 
 /* ---------- Drive: folder + file helpers ---------- */
 async function ensureRootFolder(){
+  // if the user previously picked a folder via "Find my projects", honour it
+  try{
+    const saved=localStorage.getItem('labcore_root');
+    if(saved){
+      const chk=await gapi.client.drive.files.get({fileId:saved,fields:'id,trashed'});
+      if(chk.result&&!chk.result.trashed){rootFolderId=saved;return;}
+    }
+  }catch(e){ /* saved folder gone or storage unavailable — fall through */ }
+
   const q=`name='${APP_FOLDER}' and mimeType='application/vnd.google-apps.folder' and trashed=false`;
   const r=await gapi.client.drive.files.list({
     q,fields:'files(id,name,ownedByMe,shared)',pageSize:100});
@@ -626,7 +638,92 @@ function deadlineInfo(dateStr){
   return {cls,label,days:n};
 }
 
-/* ---------- HOME: all projects as tiles ---------- */
+/* ---------- DIAGNOSTIC: find every project anywhere in Drive ----------
+   Searches the whole Drive for project.json files, works out which top-level
+   folder each one sits under, and lets you switch the app to that folder. */
+async function scanDrive(){
+  document.getElementById('mainView').innerHTML=
+    `<div class="tilebar"><h2>Find my projects</h2></div>
+     <div class="panelbox"><span class="loader"></span> Scanning your Drive…</div>`;
+  try{
+    // 1. every project.json we can see
+    let files=[],pageToken=null;
+    do{
+      const r=await gapi.client.drive.files.list({
+        q:"name='project.json' and trashed=false",
+        fields:'nextPageToken, files(id,name,parents,owners(emailAddress))',
+        pageSize:1000,pageToken:pageToken||undefined});
+      files=files.concat(r.result.files||[]);
+      pageToken=r.result.nextPageToken;
+    }while(pageToken);
+
+    if(!files.length){
+      document.getElementById('mainView').innerHTML=
+        `<div class="tilebar"><h2>Find my projects</h2></div>
+         <div class="panelbox">No <code>project.json</code> files were found anywhere in this account's Drive.
+         <br><br>That means this Google account cannot see the project data. Most likely the projects
+         live in another account's Drive and the <code>LABCORE_DATA</code> folder has not been shared
+         with this account (Share → add this account as <b>Editor</b>).</div>`;
+      return;
+    }
+
+    // 2. resolve each project folder + its parent (the LABCORE_DATA root)
+    const cache={};
+    async function meta(id){
+      if(cache[id])return cache[id];
+      const r=await gapi.client.drive.files.get({fileId:id,
+        fields:'id,name,parents,ownedByMe,owners(emailAddress)'});
+      cache[id]=r.result; return r.result;
+    }
+    const groups={};   // rootId -> {name, owner, ownedByMe, count}
+    for(const f of files){
+      try{
+        const projFolder=await meta((f.parents||[])[0]);
+        const rootId=(projFolder.parents||[])[0];
+        const root=rootId?await meta(rootId):{id:'?',name:'(no parent)'};
+        if(!groups[root.id])groups[root.id]={
+          id:root.id,name:root.name,count:0,
+          ownedByMe:root.ownedByMe,
+          owner:(root.owners&&root.owners[0]?root.owners[0].emailAddress:'—')};
+        groups[root.id].count++;
+      }catch(e){ console.warn('scan: could not resolve',f.id,e); }
+    }
+
+    const list=Object.values(groups).sort((a,b)=>b.count-a.count);
+    document.getElementById('mainView').innerHTML=`
+      <div class="tilebar"><h2>Find my projects</h2></div>
+      <div class="panelbox">
+        <p style="margin-bottom:14px;color:var(--mute);line-height:1.6">
+          Found <b>${files.length}</b> project file(s) across <b>${list.length}</b> folder(s).
+          The app is currently using folder <code>${rootFolderId}</code>.
+          Click a folder below to load its projects.</p>
+        <div id="scanList"></div>
+      </div>`;
+    const holder=document.getElementById('scanList');
+    list.forEach(g=>{
+      const cur=g.id===rootFolderId;
+      const row=document.createElement('div');
+      row.className='taskrow';
+      row.style.marginBottom='8px';
+      row.innerHTML=`<span style="line-height:1.5">
+          <b>${esc(g.name)}</b> ${cur?'<span class="prio prio-medium prio-mini">IN USE</span>':''}<br>
+          <span style="font-size:12px;color:var(--mute)">${g.count} project(s) · owner: ${esc(g.owner)} · <code>${g.id}</code></span>
+        </span>
+        <button class="btn ${cur?'btn-out':'btn-acc'}" style="padding:8px 14px;font-size:12px">${cur?'Reload':'Use this'}</button>`;
+      row.querySelector('button').onclick=async()=>{
+        rootFolderId=g.id;
+        try{localStorage.setItem('labcore_root',g.id);}catch(e){}
+        toast('Loading projects from '+g.name);
+        await loadProjects();
+        renderHome();
+      };
+      holder.appendChild(row);
+    });
+  }catch(e){
+    document.getElementById('mainView').innerHTML=
+      `<div class="panelbox">Scan failed: ${esc(e.message||String(e))}</div>`;
+  }
+}
 let homeFilter='all', homeSearch='';
 function renderHome(){
   selectedProjectIndex=-1;
