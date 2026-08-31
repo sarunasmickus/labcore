@@ -436,14 +436,37 @@ async function onConnected(){
   document.getElementById('authBtn').className='pill ghost';
   document.getElementById('newProjectBtn').style.display='block';
   renderNav();
-  document.getElementById('loginState').style.display='none';
+  const ls=document.getElementById('loginState'); if(ls)ls.style.display='none';
+  // show a loading board straight away so the screen is never left stale
+  activeNav='projects';
+  document.getElementById('mainView').innerHTML=
+    `<div class="tilebar"><h2>Projects</h2></div>
+     <div class="panelbox" id="loadState"><span class="loader"></span> Loading projects from Drive…</div>`;
   try{
     const info=await gapi.client.request({path:'https://www.googleapis.com/oauth2/v2/userinfo'});
     document.getElementById('userEmail').textContent=info.result.email||'';
   }catch(e){}
-  await ensureRootFolder();
-  await loadProjects();
-  goProjects();
+  try{
+    await ensureRootFolder();
+    await loadProjects();
+    goProjects();                       // always land on the board when done
+  }catch(e){
+    console.error('[LABCORE] load failed',e);
+    document.getElementById('mainView').innerHTML=
+      `<div class="tilebar"><h2>Projects</h2></div>
+       <div class="panelbox">
+         <b>Could not load projects.</b><br><br>
+         <span style="color:var(--mute)">${esc(e.message||String(e))}</span><br><br>
+         <button class="btn btn-acc" onclick="retryLoad()">Try again</button>
+       </div>`;
+  }
+}
+/* retry after a failed load */
+async function retryLoad(){
+  document.getElementById('mainView').innerHTML=
+    `<div class="panelbox"><span class="loader"></span> Retrying…</div>`;
+  try{ await ensureRootFolder(); await loadProjects(); goProjects(); }
+  catch(e){ toast('Still failing: '+(e.message||e),true); }
 }
 
 /* ---------- Drive: folder + file helpers ---------- */
@@ -622,7 +645,7 @@ async function writeParamsExcel(p){
 async function loadProjects(){
   projects=[];
   let folders=[],pageToken=null,skipped=0;
-  // page through every project folder (don't stop at the default page size)
+  // page through every project folder
   do{
     const r=await gapi.client.drive.files.list({
       q:`'${rootFolderId}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false`,
@@ -632,15 +655,18 @@ async function loadProjects(){
     pageToken=r.result.nextPageToken;
   }while(pageToken);
 
-  for(const folder of folders){
+  const note=document.getElementById('loadState');
+  if(note)note.innerHTML=`<span class="loader"></span> Loading ${folders.length} project folder(s)…`;
+
+  // load one project folder -> project object (or null)
+  async function loadOne(folder){
     try{
       const jr=await gapi.client.drive.files.list({
         q:`'${folder.id}' in parents and name='project.json' and trashed=false`,fields:'files(id)'});
-      if(!jr.result.files.length)continue;   // not a project folder (e.g. Drawings)
+      if(!jr.result.files.length)return null;      // not a project folder
       let data=await readJson(jr.result.files[0].id);
       if(typeof data==='string')data=JSON.parse(data);
       if(!data||typeof data!=='object')throw new Error('unreadable project.json');
-      // fill defaults so projects made by older versions still render
       data.name=data.name||folder.name.replace(/^PRJ_/,'').replace(/_/g,' ');
       data.status=data.status||'active';
       data.priority=data.priority||'Medium';
@@ -648,23 +674,34 @@ async function loadProjects(){
       data.description=data.description||'';
       data.samples=Array.isArray(data.samples)?data.samples:[];
       data.drawings=Array.isArray(data.drawings)?data.drawings:[];
-      // normalise legacy task entries (older versions stored plain strings,
-      // and briefly stored a person per task — promote those to project people)
       data.people=Array.isArray(data.people)?data.people:[];
       data.tasks=Array.isArray(data.tasks)?data.tasks.map(t=>{
         if(typeof t==='string')return {text:t,done:false};
         if(t.who&&!data.people.some(x=>x.toLowerCase()===t.who.toLowerCase()))data.people.push(t.who);
         return {text:t.text||'',done:!!t.done};
       }):[];
-      projects.push({jsonId:jr.result.files[0].id,folderId:folder.id,data});
+      return {jsonId:jr.result.files[0].id,folderId:folder.id,data};
     }catch(e){
-      skipped++;
-      console.warn('[LABCORE] could not load project folder:',folder.name,e);
+      skipped++; console.warn('[LABCORE] could not load',folder.name,e);
+      return null;
     }
   }
+
+  // fetch in parallel batches (much faster than one-by-one) and show progress
+  const BATCH=8;
+  for(let i=0;i<folders.length;i+=BATCH){
+    const chunk=folders.slice(i,i+BATCH);
+    const results=await Promise.all(chunk.map(loadOne));
+    results.forEach(r=>{ if(r)projects.push(r); });
+    const n2=document.getElementById('loadState');
+    if(n2)n2.innerHTML=`<span class="loader"></span> Loaded ${projects.length} project(s)…`;
+  }
+
+  peopleColorMap=null;   // rebuild colour assignments for the new roster
   console.log(`[LABCORE] root=${rootFolderId} folders=${folders.length} projects=${projects.length} skipped=${skipped}`);
   if(skipped)toast(skipped+' project(s) could not be read — see console',true);
 }
+
 /* escape text for safe HTML insertion */
 function esc(s){return (s||'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
 
@@ -841,9 +878,35 @@ function renderHome(){
   if(homeSearch){sb.focus();sb.setSelectionRange(sb.value.length,sb.value.length);}
 }
 /* ---------- person bubbles ---------- */
-const BUB_COLORS=['#2f6df6','#0e9f8c','#f79009','#d92d20','#7a5af8','#e0459c','#0ba5ec','#66a80f'];
+/* 16 visually distinct colours; each person gets their own */
+const BUB_COLORS=['#2f6df6','#0e9f8c','#f79009','#d92d20','#7a5af8','#e0459c',
+                  '#0ba5ec','#66a80f','#b54708','#0f766e','#6d28d9','#be123c',
+                  '#0369a1','#4d7c0f','#c2410c','#7c3aed'];
+let peopleColorMap=null;
+/* build a stable name -> colour map: every distinct person gets a different
+   colour (until the palette wraps), assigned in alphabetical order so it
+   stays consistent between sessions */
+function buildColorMap(){
+  const names=new Set();
+  projects.forEach(p=>(p.data.people||[]).forEach(n=>{
+    const v=(n||'').trim(); if(v)names.add(v.toLowerCase());
+  }));
+  (window._newPeople||[]).forEach(n=>{
+    const v=(n||'').trim(); if(v)names.add(v.toLowerCase());
+  });
+  const sorted=[...names].sort();
+  peopleColorMap={};
+  sorted.forEach((n,i)=>{peopleColorMap[n]=BUB_COLORS[i%BUB_COLORS.length];});
+  return peopleColorMap;
+}
 function bubColor(name){
-  let h=0; for(let i=0;i<name.length;i++)h=(h*31+name.charCodeAt(i))>>>0;
+  const key=(name||'').trim().toLowerCase(); if(!key)return BUB_COLORS[0];
+  if(!peopleColorMap)buildColorMap();
+  if(peopleColorMap[key])return peopleColorMap[key];
+  // name not in the roster yet (just typed) — add it and re-assign
+  buildColorMap();
+  if(peopleColorMap[key])return peopleColorMap[key];
+  let h=0; for(let i=0;i<key.length;i++)h=(h*31+key.charCodeAt(i))>>>0;
   return BUB_COLORS[h%BUB_COLORS.length];
 }
 function bubHtml(name,small){
@@ -929,8 +992,11 @@ function drawTiles(){
   LEVELS.forEach(lv=>{
     // projects in this priority column
     let items=list.filter(x=>(x.p.data.priority||'Medium')===lv);
-    // soonest deadline on top; undated sink to the bottom
+    // completed projects always sink to the bottom of the column;
+    // otherwise soonest deadline on top, undated last
     items.sort((a,b)=>{
+      const fin=x=>((x.p.data.status||'active')==='done'?1:0);
+      if(fin(a)!==fin(b))return fin(a)-fin(b);
       const da=daysUntil(a.p.data.deadline), db=daysUntil(b.p.data.deadline);
       if(da===null&&db===null)return (a.p.data.name||'').localeCompare(b.p.data.name||'');
       if(da===null)return 1;
@@ -1154,6 +1220,7 @@ function addPersonToNew(){
   const inp=document.getElementById('np_personinput');
   const v=inp.value.trim(); if(!v)return;
   togglePerson(window._newPeople,v);
+  peopleColorMap=null;
   inp.value='';inp.focus();renderNewPeople();updateNewSummary();
 }
 function renderNewPeople(){
@@ -1329,6 +1396,7 @@ async function addProjectPerson(){
   const v=inp.value.trim(); if(!v)return;
   p.data.people=p.data.people||[];
   togglePerson(p.data.people,v);
+  peopleColorMap=null;
   inp.value='';inp.focus();
   await saveProject(p);renderProjectPeople(p);
 }
