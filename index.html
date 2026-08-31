@@ -368,6 +368,51 @@
   .recdot{position:absolute;top:-2px;right:-2px;width:9px;height:9px;border-radius:50%;
     background:#f79009;border:1.5px solid #fff}
 
+  /* ---- RECIPE EDITOR (ported from the printer page) ---- */
+  .recedit{display:grid;grid-template-columns:minmax(0,1fr) 190px;gap:16px;align-items:start}
+  @media(max-width:760px){.recedit{grid-template-columns:1fr}}
+  .recedit-side{border:1px solid var(--line);border-radius:10px;background:var(--panel2);padding:11px}
+  .side-t{font-family:'Space Mono',monospace;font-size:11px;color:var(--mute);font-weight:700;margin-bottom:5px}
+  .side-h{font-family:'Space Mono',monospace;font-size:10px;color:var(--mute);margin-bottom:9px;line-height:1.4}
+  .chip{position:relative;display:block;background:#fff;border:1px solid var(--line);border-radius:6px;
+    padding:6px 9px;margin-bottom:5px;font-size:12px;font-weight:600;cursor:grab;transition:.12s}
+  .chip:hover{border-color:var(--acc);color:var(--acc)}
+  .chip:active{cursor:grabbing}
+  .chipx{position:absolute;right:6px;top:50%;transform:translateY(-50%);color:var(--mute);font-size:13px;line-height:1}
+  .chipx:hover{color:var(--warn)}
+
+  .shdr,.srow{display:grid;grid-template-columns:52px minmax(0,1fr) 58px 64px 34px 64px 30px;
+    gap:6px;align-items:center}
+  .shdr{font-size:10px;letter-spacing:.8px;text-transform:uppercase;color:var(--mute);
+    font-weight:800;padding:0 2px 6px;text-align:center}
+  .shdr span:nth-child(2){text-align:left}
+  .srow{margin-bottom:5px}
+  .srow.dragging{opacity:.45}
+  .srow.dragover{outline:2px solid var(--acc);outline-offset:2px;border-radius:6px}
+  .srow input,.srow select{padding:7px 8px;font-size:13px}
+  .srow .usi{width:auto;margin:0 auto;display:block}
+  .snum{font-family:'Space Mono',monospace;font-size:11px;color:var(--mute);cursor:grab;
+    background:var(--panel2);border:1px solid var(--line);border-radius:6px;padding:6px 4px;text-align:center}
+  .snum:active{cursor:grabbing}
+  .xbtn{background:transparent;color:var(--mute);font-size:16px;line-height:1;padding:4px;border-radius:5px}
+  .xbtn:hover{background:#fdeceb;color:var(--warn)}
+
+  .modetog{display:flex;gap:6px;margin:12px 0}
+  .tbtn{padding:8px 15px;border-radius:var(--r);border:1px solid var(--line);background:#fff;
+    font-size:13px;font-weight:700;color:var(--mute);transition:.12s}
+  .tbtn:hover{border-color:var(--acc);color:var(--acc)}
+  .tbtn.on{background:var(--acc);border-color:var(--acc);color:#fff}
+
+  .lgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:12px}
+  .lcard{border:1px solid var(--line);border-radius:10px;padding:10px;background:#fff;
+    position:relative;text-align:center}
+  .lcard img{max-width:100%;height:52px;object-fit:contain;display:block;margin:0 auto 7px}
+  .lcard .ln{font-size:12px;font-weight:700;word-break:break-word}
+  .lcard .lmeta{font-size:10px;color:var(--mute);margin-top:2px}
+  .lcard .ld{position:absolute;top:5px;right:5px;background:transparent;color:var(--mute);
+    font-size:12px;padding:2px 5px;border-radius:5px}
+  .lcard .ld:hover{background:#fdeceb;color:var(--warn)}
+
   .syncstate{display:inline-flex;align-items:center;gap:6px;font-size:11px;font-weight:700;
     transition:opacity .4s;white-space:nowrap}
   .syncstate.busy{color:var(--mute)}
@@ -523,6 +568,8 @@ async function onConnected(){
   try{
     await ensureRootFolder();
     await loadConfig();
+    await loadLogos();
+    await loadPrintedLog();
     await loadProjects();
     goProjects();                       // always land on the board when done
   }catch(e){
@@ -739,7 +786,7 @@ async function syncProjectFiles(p,save){
 
 /* ============ LABCORE CONFIG (shared with the team via Drive) ============
    Holds the Recipe Logger Apps Script URL used to read printed recipes.     */
-let labConfig={appsScriptUrl:''};
+let labConfig={appsScriptUrl:'',presets:[]};
 let configFileId=null;
 async function loadConfig(){
   try{ const local=localStorage.getItem('labcore_cfg');
@@ -750,6 +797,7 @@ async function loadConfig(){
       const j=await readJson(id);
       const obj=(typeof j==='string')?JSON.parse(j):j;
       if(obj&&typeof obj==='object')labConfig=Object.assign(labConfig,obj);
+      if(Array.isArray(labConfig.presets))customPresets=labConfig.presets.slice();
     }
   }catch(e){ console.warn('[LABCORE] config load',e); }
 }
@@ -1104,11 +1152,29 @@ async function printerCheck(ip){
   const d=await r.json();
   return !!d.ok;
 }
-/* send a list of {lines,opts} segments; only the last one feeds paper */
+/* centre a logo bitmap on the 384-dot paper (byte-level, keeps density) */
+function centerLogoOnPaper(seg){
+  if(!seg||seg.width===PW)return seg;
+  const srcW=Math.min(seg.width,PW), srcBpr=Math.ceil(seg.width/8);
+  const out=new Uint8Array(seg.height*BPR);
+  const x0=Math.max(0,Math.floor((PW-srcW)/2));
+  for(let y=0;y<seg.height;y++)for(let x=0;x<srcW;x++){
+    const bit=(seg.packed[y*srcBpr+Math.floor(x/8)]>>(7-(x%8)))&1;
+    if(bit){const ox=x0+x; out[y*BPR+Math.floor(ox/8)]|=(0x80>>(ox%8));}
+  }
+  return {...seg,packed:out,width:PW};
+}
+/* send segments; text via /print, logos via /bitmap, feed only on the last */
 async function sendSegs(segs){
   for(let i=0;i<segs.length;i++){
-    await printerPost('/print',{type:'textlines',lines:segs[i].lines,
-      opts:segs[i].opts,feed:i===segs.length-1});
+    const seg=segs[i], feed=(i===segs.length-1);
+    if(seg.type==='logo'){
+      const o=centerLogoOnPaper(seg);
+      await printerPost('/bitmap',{width:o.width,height:o.height,
+        data:u8ToB64(o.packed),align:'left',feed});
+    }else{
+      await printerPost('/print',{type:'textlines',lines:seg.lines,opts:seg.opts,feed});
+    }
   }
   return true;
 }
@@ -1144,11 +1210,13 @@ function buildRecipeSegs(rec,sampleLabel,big){
   });
   if(rec.footer){ body.push(DASH); txtWrap(ltAsc(rec.footer),CW).forEach(l=>body.push(l)); }
 
-  return [
-    {lines:head,      opts:{bold:false,center:false,size:1}},
-    {lines:titleLines,opts:{bold:true, center:true, size:scale}},
-    {lines:body,      opts:{bold:false,center:false,size:scale}},
-  ];
+  const segs=[];
+  const logo=findLogo(rec.logo);
+  if(logo&&logo.packed)segs.push({type:'logo',packed:logo.packed,width:logo.w,height:logo.h});
+  segs.push({lines:head,      opts:{bold:false,center:false,size:1}});
+  segs.push({lines:titleLines,opts:{bold:true, center:true, size:scale}});
+  segs.push({lines:body,      opts:{bold:false,center:false,size:scale}});
+  return segs;
 }
 /* print a sample's recipe */
 async function printSampleRecipe(p,si,big){
@@ -1157,7 +1225,108 @@ async function printSampleRecipe(p,si,big){
   await sendSegs(buildRecipeSegs(sm.recipe,sm.label,big));
   sm.recipe.printedAt=new Date().toISOString();
   await saveProject(p);
+  try{ await recordPrintedRecipe(p,sm,sm.recipe); }
+  catch(e){ console.warn('[LABCORE] printed-log write failed',e);
+            toast('Printed, but the master log could not be updated',true); }
   return true;
+}
+
+/* ================= LOGOS (shared via Drive) ================= */
+const PW=384, BPR=48;                      // paper width in dots / bytes per row
+let labLogos=[]; let logosFileId=null;
+function b64ToU8(b64){const bin=atob(b64);const u=new Uint8Array(bin.length);
+  for(let i=0;i<bin.length;i++)u[i]=bin.charCodeAt(i);return u;}
+function u8ToB64(u8){let s='';for(let i=0;i<u8.length;i++)s+=String.fromCharCode(u8[i]);return btoa(s);}
+async function loadLogos(){
+  try{
+    const id=await findFile('logos.json',rootFolderId);
+    if(!id){labLogos=[];return;}
+    logosFileId=id;
+    let j=await readJson(id); if(typeof j==='string')j=JSON.parse(j);
+    labLogos=(Array.isArray(j)?j:[]).map(l=>({...l,packed:b64ToU8(l.b64||'')}));
+  }catch(e){ console.warn('[LABCORE] logos load',e); labLogos=[]; }
+}
+async function saveLogos(){
+  const plain=labLogos.map(({key,name,w,h,prev,b64})=>({key,name,w,h,prev,b64}));
+  logosFileId=await writeJson('logos.json',rootFolderId,plain,logosFileId);
+}
+/* turn an uploaded image into a 1-bit bitmap the printer understands */
+function imageToLogo(file){
+  return new Promise((resolve,reject)=>{
+    const img=new Image(); const url=URL.createObjectURL(file);
+    img.onload=()=>{
+      try{
+        const sc=Math.min(PW/img.width,240/img.height,1);
+        const dw=Math.round(img.width*sc), dh=Math.round(img.height*sc);
+        const c=document.createElement('canvas'); c.width=PW; c.height=dh;
+        const ctx=c.getContext('2d');
+        ctx.fillStyle='#fff'; ctx.fillRect(0,0,PW,dh);
+        ctx.drawImage(img,Math.round((PW-dw)/2),0,dw,dh);
+        const id=ctx.getImageData(0,0,PW,dh);
+        const packed=new Uint8Array(dh*BPR);
+        for(let py=0;py<dh;py++)for(let px=0;px<PW;px++){
+          const i=(py*PW+px)*4;
+          const lum=0.299*id.data[i]+0.587*id.data[i+1]+0.114*id.data[i+2];
+          if(lum<160)packed[py*BPR+Math.floor(px/8)]|=(0x80>>(px%8));
+        }
+        const pv=document.createElement('canvas');
+        pv.width=96; pv.height=Math.max(1,Math.round(dh*96/PW));
+        pv.getContext('2d').drawImage(c,0,0,pv.width,pv.height);
+        URL.revokeObjectURL(url);
+        resolve({key:'l'+Date.now(),name:file.name.replace(/\.[^.]+$/,''),
+                 packed,b64:u8ToB64(packed),w:PW,h:dh,prev:pv.toDataURL()});
+      }catch(err){reject(err);}
+    };
+    img.onerror=()=>reject(new Error('Could not read image'));
+    img.src=url;
+  });
+}
+function findLogo(nameOrKey){
+  if(!nameOrKey)return null;
+  return labLogos.find(l=>l.key===nameOrKey)||labLogos.find(l=>l.name===nameOrKey)||null;
+}
+
+/* ============== MASTER LOG OF EVERY PRINTED RECIPE ==============
+   Kept as printed_recipes.json (source of truth) in LABCORE_DATA and
+   mirrored to printed_recipes.xlsx after every print.                */
+let printedLog=[]; let printedLogId=null; let printedXlsxId=null;
+async function loadPrintedLog(){
+  try{
+    const id=await findFile('printed_recipes.json',rootFolderId);
+    if(!id){printedLog=[];return;}
+    printedLogId=id;
+    let j=await readJson(id); if(typeof j==='string')j=JSON.parse(j);
+    printedLog=Array.isArray(j)?j:(j.entries||[]);
+  }catch(e){ console.warn('[LABCORE] printed log load',e); printedLog=[]; }
+}
+async function recordPrintedRecipe(p,sm,rec){
+  printedLog.push({printedAt:rec.printedAt||new Date().toISOString(),
+    project:p.data.name,sample:sm.label,recipe:JSON.parse(JSON.stringify(rec))});
+  printedLogId=await writeJson('printed_recipes.json',rootFolderId,printedLog,printedLogId);
+  await writePrintedXlsx();
+}
+async function writePrintedXlsx(){
+  const unitShort=u=>({min:'m.',s:'s.',h:'h.'}[u]||u||'');
+  const aoa=[['Printed at','Project','Sample','Recipe date','#','Step','Time','US','Temp','Notes']];
+  printedLog.slice().sort((a,b)=>new Date(b.printedAt)-new Date(a.printedAt)).forEach(e=>{
+    const r=e.recipe||{};
+    aoa.push([fmtStamp(e.printedAt),e.project||'',e.sample||'',r.recipeDateTime||'','','','','','','']);
+    (r.rows||[]).forEach((row,i)=>aoa.push(['','','','',row.index||i+1,row.step||'',
+      row.time?String(row.time)+(row.unit?' '+unitShort(row.unit):''):'',
+      row.us?'US':'',row.temp||'',row.notes||'']));
+    if(r.footer)aoa.push(['','','','','','Notes: '+r.footer,'','','','']);
+    aoa.push(['','','','','','','','','','']);
+  });
+  const ws=XLSX.utils.aoa_to_sheet(aoa);
+  ws['!cols']=[{wch:20},{wch:22},{wch:14},{wch:16},{wch:4},{wch:26},{wch:10},{wch:5},{wch:9},{wch:24}];
+  const wb=XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb,ws,'Printed recipes');
+  const out=XLSX.write(wb,{bookType:'xlsx',type:'array'});
+  const blob=new Blob([out],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'});
+  const existing=printedXlsxId||await findFile('printed_recipes.xlsx',rootFolderId);
+  const r=await uploadBlob('printed_recipes.xlsx',rootFolderId,blob,blob.type,existing);
+  printedXlsxId=r.id;
+  return r;
 }
 
 /* ---------- PRINTER PAGE (connection + direct printing) ---------- */
@@ -1185,6 +1354,19 @@ function renderPrinter(){
         </p>
       </div>
 
+      <div class="panelbox span2">
+        <div class="panel-head"><h3><span class="tag laser">LOGOS</span> Printed at the top of a recipe</h3>
+          <span style="display:flex;gap:9px;align-items:center">
+            <input type="file" id="lg_file" accept="image/*" style="width:auto;font-size:12px">
+          </span>
+        </div>
+        <div id="lg_grid" class="lgrid"></div>
+        <p style="color:var(--mute);font-size:12px;margin-top:12px;line-height:1.6">
+          Images are converted to 1-bit bitmaps for the thermal printer and stored in the shared
+          Drive folder, so everyone sees the same logo list. Choose one per recipe in the editor.
+        </p>
+      </div>
+
       <div class="panelbox">
         <div class="panel-head"><h3><span class="tag file">QUICK PRINT</span> Free text</h3></div>
         <div class="field"><label>Text</label>
@@ -1195,7 +1377,36 @@ function renderPrinter(){
           <button class="btn btn-acc" id="prn_send" ${blocked?'disabled':''}>Print</button>
         </div>
       </div>
+
+      <div class="panelbox">
+        <div class="panel-head"><h3><span class="tag chem">ARCHIVE</span> Master print log</h3></div>
+        <p style="color:var(--mute);font-size:13px;line-height:1.6;margin-bottom:12px">
+          Every recipe printed from LabCore is copied into one workbook,
+          <code>printed_recipes.xlsx</code>, in the shared <code>LABCORE_DATA</code> folder —
+          a complete history across all projects and samples.
+        </p>
+        <div class="row"><span class="k">Recipes printed so far</span><span class="v">${printedLog.length}</span></div>
+        <div class="row"><span class="k">Most recent</span><span class="v">${printedLog.length?esc(fmtStamp(printedLog[printedLog.length-1].printedAt)):'—'}</span></div>
+        <button class="btn btn-out" id="prn_openlog" style="margin-top:14px;width:100%">📊 Open printed_recipes.xlsx</button>
+      </div>
     </div>`;
+  renderLogoGrid();
+  document.getElementById('lg_file').onchange=async(e)=>{
+    const f=e.target.files[0]; if(!f)return;
+    try{
+      const lg=await imageToLogo(f);
+      labLogos.push(lg); await saveLogos();
+      renderLogoGrid(); toast('Logo saved');
+    }catch(err){ toast('Logo failed: '+err.message,true); }
+    e.target.value='';
+  };
+  document.getElementById('prn_openlog').onclick=async()=>{
+    try{
+      let id=printedXlsxId||await findFile('printed_recipes.xlsx',rootFolderId);
+      if(!id){ const r=await writePrintedXlsx(); id=r.id; }
+      window.open('https://drive.google.com/file/d/'+id+'/view','_blank');
+    }catch(e){ toast('Could not open the log: '+e.message,true); }
+  };
   if(blocked){setPrnState('err','View-only (https)');return;}
   const ipEl=document.getElementById('prn_ip');
   document.getElementById('prn_connect').onclick=async()=>{
@@ -1224,6 +1435,23 @@ function renderPrinter(){
     }catch(e){ toast(e.message,true); }
   };
   if(printerIP)document.getElementById('prn_connect').click();
+}
+function renderLogoGrid(){
+  const g=document.getElementById('lg_grid'); if(!g)return;
+  if(!labLogos.length){g.innerHTML='<div class="empty-note" style="padding:14px">No logos yet — upload an image above.</div>';return;}
+  g.innerHTML='';
+  labLogos.forEach(l=>{
+    const c=document.createElement('div'); c.className='lcard';
+    c.innerHTML=`<img src="${l.prev}" alt="">
+      <div class="ln">${esc(l.name)}</div>
+      <div class="lmeta">${l.w}×${l.h}</div>
+      <button class="ld" title="Delete">✕</button>`;
+    c.querySelector('.ld').onclick=async()=>{
+      labLogos=labLogos.filter(x=>x.key!==l.key);
+      await saveLogos(); renderLogoGrid(); toast('Logo removed');
+    };
+    g.appendChild(c);
+  });
 }
 function setPrnState(kind,text){
   const el=document.getElementById('prn_state'); if(!el)return;
@@ -2096,81 +2324,277 @@ function nowStamp(){
   const d=new Date(),p2=n=>String(n).padStart(2,'0');
   return `${d.getFullYear()}-${p2(d.getMonth()+1)}-${p2(d.getDate())} ${p2(d.getHours())}:${p2(d.getMinutes())}`;
 }
+const DEFAULT_PRESETS=['NaOH','H2O','Propanol','Ag','Quadrol','Build','Strike','IC copper'];
+let customPresets=[];               // shared via Drive (config)
+const MONTHS=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+
+function splitTimeValue(time=''){
+  const raw=String(time||'').trim();
+  const m=raw.match(/^(.+?)\s*(h|hr|hour|hours|min|m|sec|s|seconds?)$/i);
+  if(!m)return {num:raw,unit:'min'};
+  let u=m[2].toLowerCase();
+  if(u==='m')u='min';
+  else if(u==='sec'||u==='second'||u==='seconds')u='s';
+  else if(u==='hr'||u==='hour'||u==='hours')u='h';
+  return {num:m[1].trim(),unit:u};
+}
+function recDateFromSelects(){
+  const d=document.getElementById('er_dy'),m=document.getElementById('er_dm'),y=document.getElementById('er_dyr');
+  if(!d||!m||!y)return nowStamp();
+  const day=parseInt(d.value,10),mon=parseInt(m.value,10),yr=parseInt(y.value,10);
+  if(!day||isNaN(mon)||!yr)return nowStamp();
+  const p2=n=>String(n).padStart(2,'0');
+  const now=new Date();
+  return `${yr}-${p2(mon+1)}-${p2(day)} ${p2(now.getHours())}:${p2(now.getMinutes())}`;
+}
+
 function editRecipe(p,si){
   const sm=p.data.samples[si];
   window._editRec=JSON.parse(JSON.stringify(sm.recipe||blankRecipe(sm)));
-  if(!window._editRec.rows.length)window._editRec.rows.push({step:'',time:'',unit:'min',us:false,temp:'',notes:''});
+  const rec=window._editRec;
+  const parsed=(()=>{                       // pre-select the stored recipe date
+    const m=String(rec.recipeDateTime||'').match(/^(\d{4})-(\d{2})-(\d{2})/);
+    const d=m?new Date(+m[1],+m[2]-1,+m[3]):new Date();
+    return {d:d.getDate(),m:d.getMonth(),y:d.getFullYear()};
+  })();
+  const thisYear=new Date().getFullYear();
+  const days=Array.from({length:31},(_,i)=>i+1);
+  const years=Array.from({length:6},(_,i)=>thisYear-2+i);
+
   openModal(`<span class="tag chem">RECIPE</span> ${esc(sm.label)}`,`
-    <div class="two" style="margin-bottom:12px">
-      <div class="field"><label>Recipe date</label>
-        <input id="er_date" value="${esc(window._editRec.recipeDateTime||'')}"></div>
-      <div class="field"><label>Printed as (name on the printout)</label>
-        <input id="er_name" value="${esc(window._editRec.sampleName||sm.label)}"></div>
-    </div>
-    <label>Steps</label>
-    <table class="rectab" id="er_tab"><thead><tr>
-      <th>#</th><th>Step</th><th>Time</th><th>Unit</th><th>US</th><th>Temp</th><th>Notes</th><th></th>
-    </tr></thead><tbody id="er_rows"></tbody></table>
-    <button class="btn btn-out" style="margin-top:10px;padding:7px 14px;font-size:12px" onclick="addRecRow()">+ Add step</button>
-    <div class="field" style="margin-top:14px"><label>Notes / footer</label>
-      <textarea id="er_footer" rows="2">${esc(window._editRec.footer||'')}</textarea></div>
-    <div style="display:flex;gap:9px;margin-top:8px;flex-wrap:wrap">
-      <button class="btn btn-acc" style="flex:1" onclick="saveRecipe(projects[selectedProjectIndex],${si})">Save recipe</button>
-      ${canPrint()?`<button class="btn btn-blue" onclick="saveRecipe(projects[selectedProjectIndex],${si},true)">💾 Save &amp; print</button>`:''}
-      <button class="btn btn-out" onclick="showSample(projects[selectedProjectIndex],${si})">Cancel</button>
-    </div>
-    ${canPrint()?'':`<p style="color:var(--mute);font-size:12px;margin-top:10px;line-height:1.5">
-      Printing is available when LabCore runs on the lab computer. Here you can create and edit recipes.</p>`}`,true);
-  drawRecRows();
+    <div class="recedit">
+      <div class="recedit-main">
+
+        <div class="two">
+          <div class="field"><label>Sample name (printed)</label>
+            <input id="er_name" value="${esc(rec.sampleName||sm.label)}"></div>
+          <div class="field"><label>Date</label>
+            <div style="display:flex;gap:6px">
+              <select id="er_dy" style="flex:1">${days.map(d=>`<option${d===parsed.d?' selected':''}>${d}</option>`).join('')}</select>
+              <select id="er_dm" style="flex:2">${MONTHS.map((m,i)=>`<option value="${i}"${i===parsed.m?' selected':''}>${m}</option>`).join('')}</select>
+              <select id="er_dyr" style="flex:1.4">${years.map(y=>`<option${y===parsed.y?' selected':''}>${y}</option>`).join('')}</select>
+            </div>
+          </div>
+        </div>
+
+        <div class="modetog">
+          <button class="tbtn${(rec.mode||'chem')!=='free'?' on':''}" id="er_mchem" onclick="setRecMode('chem')">⚗ Steps</button>
+          <button class="tbtn${(rec.mode||'chem')==='free'?' on':''}" id="er_mfree" onclick="setRecMode('free')">≡ Free text</button>
+        </div>
+
+        <div id="er_chem" style="${(rec.mode||'chem')==='free'?'display:none':''}">
+          <label>Steps</label>
+          <div class="shdr"><span></span><span>Step</span><span>Time</span><span>Unit</span><span>US</span><span>Temp</span><span></span></div>
+          <div id="er_rows" ondragover="stepListDragOver(event)" ondrop="stepListDrop(event)"></div>
+          <button class="btn btn-out" style="margin-top:9px;padding:7px 14px;font-size:12px" onclick="addRecRow()">+ Add step</button>
+        </div>
+
+        <div id="er_free" style="${(rec.mode||'chem')==='free'?'':'display:none'}">
+          <div class="field"><label>Paste from Excel — Step / Time / Notes columns</label>
+            <textarea id="er_paste" rows="4" placeholder="Paste rows here, then press Import"></textarea>
+            <button class="btn btn-out" style="margin-top:7px;padding:7px 14px;font-size:12px" onclick="importPastedSteps()">⇩ Import as steps</button>
+          </div>
+          <div class="field"><label>Instructions / free text</label>
+            <textarea id="er_ft" rows="7">${esc(rec.freeText||'')}</textarea></div>
+        </div>
+
+        <div class="field" style="margin-top:12px"><label>Notes / footer</label>
+          <input id="er_footer" value="${esc(rec.footer||'')}"></div>
+
+        <div class="two">
+          <div class="field"><label>Font size</label>
+            <div class="modetog" style="margin:0">
+              <button class="tbtn${rec.big?'':' on'}" id="er_szS" onclick="setRecSize(false)">S</button>
+              <button class="tbtn${rec.big?' on':''}" id="er_szL" onclick="setRecSize(true)">L</button>
+            </div>
+          </div>
+          <div class="field"><label>Logo</label>
+            <select id="er_logo">
+              <option value="">— none —</option>
+              ${labLogos.map(l=>`<option value="${esc(l.name)}"${(rec.logo===l.name||rec.logo===l.key)?' selected':''}>${esc(l.name)}</option>`).join('')}
+            </select>
+          </div>
+        </div>
+
+        <div style="display:flex;gap:9px;margin-top:14px;flex-wrap:wrap">
+          <button class="btn btn-acc" style="flex:1" onclick="saveRecipe(projects[selectedProjectIndex],${si})">Save recipe</button>
+          ${canPrint()?`<button class="btn btn-blue" onclick="saveRecipe(projects[selectedProjectIndex],${si},true)">⎙ Save &amp; print</button>`:''}
+          <button class="btn btn-out" onclick="showSample(projects[selectedProjectIndex],${si})">Cancel</button>
+        </div>
+        ${canPrint()?'':`<p style="color:var(--mute);font-size:12px;margin-top:9px;line-height:1.5">
+          Printing happens on the lab computer. Here you can create and edit recipes.</p>`}
+      </div>
+
+      <div class="recedit-side">
+        <div class="side-t">TILES</div>
+        <div class="side-h">Click to add · drag into steps</div>
+        <div id="er_presets"></div>
+        <div style="display:flex;gap:5px;margin-top:9px">
+          <input id="er_newpreset" placeholder="New tile" style="flex:1;min-width:0;font-size:12px;padding:6px 8px"
+            onkeydown="if(event.key==='Enter'){event.preventDefault();addCustomPreset();}">
+          <button class="btn btn-out" style="padding:6px 10px;font-size:13px" onclick="addCustomPreset()">+</button>
+        </div>
+      </div>
+    </div>`,true);
+
+  if(!rec.rows.length&&(rec.mode||'chem')!=='free')rec.rows.push({step:'',time:'',unit:'min',us:false,temp:'',notes:''});
+  drawRecRows(); renderPresetTiles();
 }
-function drawRecRows(){
-  const tb=document.getElementById('er_rows'); if(!tb)return;
-  tb.innerHTML='';
-  window._editRec.rows.forEach((r,i)=>{
-    const tr=document.createElement('tr');
-    tr.innerHTML=`
-      <td class="num">${i+1}</td>
-      <td><input value="${esc(r.step||'')}" data-f="step" placeholder="e.g. NaOH 5%"></td>
-      <td><input value="${esc(r.time||'')}" data-f="time" style="width:64px"></td>
-      <td><select data-f="unit" style="width:74px">
-        ${['min','s','h'].map(u=>`<option${(r.unit||'min')===u?' selected':''}>${u}</option>`).join('')}
-      </select></td>
-      <td class="num"><input type="checkbox" data-f="us" ${r.us?'checked':''} style="width:auto"></td>
-      <td><input value="${esc(r.temp||'')}" data-f="temp" style="width:74px" placeholder="20C"></td>
-      <td><input value="${esc(r.notes||'')}" data-f="notes"></td>
-      <td><button class="taskdel" title="Remove step">✕</button></td>`;
-    tr.querySelectorAll('[data-f]').forEach(el=>{
-      const f=el.dataset.f;
-      el.onchange=()=>{window._editRec.rows[i][f]=(el.type==='checkbox')?el.checked:el.value;};
-      el.oninput =()=>{window._editRec.rows[i][f]=(el.type==='checkbox')?el.checked:el.value;};
-    });
-    tr.querySelector('.taskdel').onclick=()=>{window._editRec.rows.splice(i,1);drawRecRows();};
-    tb.appendChild(tr);
+function setRecMode(m){
+  window._editRec.mode=m;
+  document.getElementById('er_chem').style.display=(m==='free')?'none':'';
+  document.getElementById('er_free').style.display=(m==='free')?'':'none';
+  document.getElementById('er_mchem').classList.toggle('on',m!=='free');
+  document.getElementById('er_mfree').classList.toggle('on',m==='free');
+}
+function setRecSize(big){
+  window._editRec.big=big;
+  document.getElementById('er_szS').classList.toggle('on',!big);
+  document.getElementById('er_szL').classList.toggle('on',big);
+}
+function renderPresetTiles(){
+  const box=document.getElementById('er_presets'); if(!box)return;
+  box.innerHTML='';
+  DEFAULT_PRESETS.concat(customPresets).forEach(name=>{
+    const custom=!DEFAULT_PRESETS.includes(name);
+    const c=document.createElement('div');
+    c.className='chip'; c.draggable=true; c.title='Click to add · drag into steps';
+    c.innerHTML=esc(name)+(custom?'<span class="chipx" title="Remove tile">×</span>':'');
+    c.onclick=e=>{ if(e.target.classList.contains('chipx'))return; quickAddStep(name); };
+    c.ondragstart=ev=>{ ev.dataTransfer.setData('text/plain','__preset__'+name);
+                        ev.dataTransfer.effectAllowed='copy'; };
+    if(custom)c.querySelector('.chipx').onclick=async e=>{
+      e.stopPropagation();
+      customPresets=customPresets.filter(x=>x!==name);
+      labConfig.presets=customPresets; await saveConfig(); renderPresetTiles();
+    };
+    box.appendChild(c);
   });
+}
+async function addCustomPreset(){
+  const inp=document.getElementById('er_newpreset');
+  const name=(inp.value||'').trim(); if(!name)return;
+  const all=DEFAULT_PRESETS.concat(customPresets);
+  if(all.some(x=>x.toLowerCase()===name.toLowerCase())){toast('That tile already exists',true);return;}
+  customPresets.push(name); labConfig.presets=customPresets;
+  inp.value=''; renderPresetTiles(); await saveConfig(); toast('Tile added');
+}
+function quickAddStep(name){
+  window._editRec.rows.push({step:name,time:'',
+    unit:(name.trim().toUpperCase()==='H2O')?'s':'min',us:false,temp:'',notes:''});
+  if(window._editRec.mode==='free')setRecMode('chem');
+  drawRecRows();
 }
 function addRecRow(){
   window._editRec.rows.push({step:'',time:'',unit:'min',us:false,temp:'',notes:''});
   drawRecRows();
+  const rows=document.querySelectorAll('#er_rows .srow');
+  const last=rows[rows.length-1]; if(last)last.querySelector('.ci').focus();
 }
+
+/* ---- steps list with drag-to-reorder ---- */
+let dragFrom=null;
+function drawRecRows(){
+  const tb=document.getElementById('er_rows'); if(!tb)return;
+  tb.innerHTML='';
+  window._editRec.rows.forEach((r,i)=>{
+    const row=document.createElement('div'); row.className='srow'; row.dataset.i=i;
+    row.innerHTML=`
+      <span class="snum" draggable="true" title="Drag to reorder">☰ ${i+1}</span>
+      <input class="ci" value="${esc(r.step||'')}" placeholder="step">
+      <input class="timei" value="${esc(r.time||'')}">
+      <select class="timeu">
+        ${['s','min','h'].map(u=>`<option value="${u}"${(r.unit||'min')===u?' selected':''}>${u==='s'?'sec':u}</option>`).join('')}
+      </select>
+      <input class="usi" type="checkbox" ${r.us?'checked':''} title="Ultrasound">
+      <input class="tempi" value="${esc(r.temp||'')}" placeholder="20C">
+      <button class="xbtn" title="Remove">×</button>`;
+    const ci=row.querySelector('.ci'), ti=row.querySelector('.timei'), tu=row.querySelector('.timeu');
+    ci.oninput=()=>{ r.step=ci.value;
+      if(ci.value.trim().toUpperCase()==='H2O'&&!ti.value.trim())tu.value='s',r.unit='s'; };
+    ti.oninput=()=>r.time=ti.value;
+    tu.onchange=()=>r.unit=tu.value;
+    row.querySelector('.usi').onchange=e=>r.us=e.target.checked;
+    row.querySelector('.tempi').oninput=e=>r.temp=e.target.value;
+    row.querySelector('.xbtn').onclick=()=>{window._editRec.rows.splice(i,1);drawRecRows();};
+    const h=row.querySelector('.snum');
+    h.ondragstart=ev=>{dragFrom=i;ev.dataTransfer.effectAllowed='move';
+      ev.dataTransfer.setData('text/plain','__move__');setTimeout(()=>row.classList.add('dragging'),0);};
+    h.ondragend=()=>{row.classList.remove('dragging');dragFrom=null;};
+    row.ondragover=ev=>{ev.preventDefault();ev.stopPropagation();row.classList.add('dragover');};
+    row.ondragleave=()=>row.classList.remove('dragover');
+    row.ondrop=ev=>{
+      ev.preventDefault();ev.stopPropagation();row.classList.remove('dragover');
+      const data=ev.dataTransfer.getData('text/plain')||'';
+      const rows=window._editRec.rows;
+      if(data.startsWith('__preset__')){
+        const nm=data.slice(10);
+        rows.splice(i,0,{step:nm,time:'',unit:(nm.trim().toUpperCase()==='H2O')?'s':'min',us:false,temp:'',notes:''});
+      }else if(dragFrom!==null&&dragFrom!==i){
+        const [m]=rows.splice(dragFrom,1); rows.splice(i,0,m);
+      }
+      dragFrom=null; drawRecRows();
+    };
+    tb.appendChild(row);
+  });
+}
+function stepListDragOver(ev){ev.preventDefault();}
+function stepListDrop(ev){
+  ev.preventDefault();
+  const data=ev.dataTransfer.getData('text/plain')||'';
+  if(data.startsWith('__preset__')){
+    const nm=data.slice(10);
+    window._editRec.rows.push({step:nm,time:'',
+      unit:(nm.trim().toUpperCase()==='H2O')?'s':'min',us:false,temp:'',notes:''});
+    drawRecRows();
+  }
+}
+/* paste Step / Time / Notes columns from Excel */
+function importPastedSteps(){
+  const txt=(document.getElementById('er_paste').value||'').trim();
+  if(!txt){toast('Nothing pasted',true);return;}
+  let n=0;
+  txt.split('\n').forEach(line=>{
+    const parts=line.split(/\t|\s{2,}/).map(x=>x.trim()).filter(Boolean);
+    if(!parts.length)return;
+    const tv=splitTimeValue(parts[1]||'');
+    window._editRec.rows.push({step:parts[0],time:tv.num,unit:tv.unit,
+      us:false,temp:'',notes:parts.slice(2).join(' ')});
+    n++;
+  });
+  document.getElementById('er_paste').value='';
+  setRecMode('chem'); drawRecRows();
+  toast(n+' step(s) imported');
+}
+
 async function saveRecipe(p,si,alsoPrint){
   const sm=p.data.samples[si];
   const rec=window._editRec;
-  rec.recipeDateTime=document.getElementById('er_date').value.trim();
+  rec.recipeDateTime=recDateFromSelects();
   rec.sampleName=document.getElementById('er_name').value.trim()||sm.label;
   rec.footer=document.getElementById('er_footer').value.trim();
-  rec.mode='chem';
-  rec.rows=rec.rows.filter(r=>(r.step||'').trim()).map((r,i)=>({
-    index:i+1,step:r.step,time:r.time||'',unit:r.unit||'min',
-    us:!!r.us,temp:r.temp||'',notes:r.notes||''}));
-  if(!rec.rows.length){toast('Add at least one step',true);return;}
+  rec.logo=(document.getElementById('er_logo')||{}).value||'';
+  rec.freeText=(document.getElementById('er_ft')||{}).value||'';
+  rec.mode=rec.mode||'chem';
+  if(rec.mode==='free'){
+    if(!rec.freeText.trim()){toast('Enter the instructions',true);return;}
+    rec.rows=rec.freeText.split('\n').filter(l=>l.trim()).map((l,i)=>{
+      const parts=l.split(/\t|\s{2,}/).map(x=>x.trim()).filter(Boolean);
+      return {index:i+1,step:parts[0]||l.trim(),time:parts[1]||'',unit:'',
+              us:false,temp:'',notes:parts.slice(2).join(' ')};
+    });
+  }else{
+    rec.rows=rec.rows.filter(r=>(r.step||'').trim()).map((r,i)=>({
+      index:i+1,step:r.step,time:r.time||'',unit:r.unit||'min',
+      us:!!r.us,temp:r.temp||'',notes:r.notes||''}));
+    if(!rec.rows.length){toast('Add at least one step',true);return;}
+  }
   sm.recipe=rec;
   await saveProject(p); await writeParamsExcel(p);
   if(alsoPrint){
-    try{ await printSampleRecipe(p,si,false); toast('Recipe saved and printed'); }
+    try{ await printSampleRecipe(p,si,!!rec.big); toast('Recipe saved and printed'); }
     catch(e){ toast('Saved, but printing failed: '+e.message,true); }
-  }else{
-    toast('Recipe saved · spreadsheet updated');
-  }
+  }else{ toast('Recipe saved · spreadsheet updated'); }
   showSample(p,si); renderSamples(p);
 }
 
