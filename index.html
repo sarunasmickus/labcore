@@ -802,17 +802,6 @@ async function writeParamsExcel(p){
     ['Source / model', s=>fmt(s.laser?.source)],
     ['Notes', s=>fmt(s.laser?.notes)],
   ];
-  const chemRows=[
-    ['Solution / electrolyte', s=>fmt(s.chem?.solution)],
-    ['Concentration', s=>fmt(s.chem?.concentration,s.chem?.concentration_u)],
-    ['pH', s=>fmt(s.chem?.ph)],
-    ['Temperature (°C)', s=>fmt(s.chem?.temp)],
-    ['Voltage', s=>fmt(s.chem?.voltage,s.chem?.voltage_u)],
-    ['Current density', s=>fmt(s.chem?.current,s.chem?.current_u)],
-    ['Duration', s=>fmt(s.chem?.duration,s.chem?.duration_u)],
-    ['Process', s=>fmt(s.chem?.process)],
-    ['Notes', s=>fmt(s.chem?.notes)],
-  ];
 
   const buildSheet=(rows)=>{
     const header=['Parameter',...(samples.length?samples.map(s=>s.label):['(no samples)'])];
@@ -827,13 +816,13 @@ async function writeParamsExcel(p){
 
   const wb=XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb,buildSheet(laserRows),'Laser');
-  XLSX.utils.book_append_sheet(wb,buildSheet(chemRows),'Chemical');
 
   // Recipes sheet — mirrors the thermal printer's own layout
   const withRec=samples.filter(sm=>sm.recipe&&Array.isArray(sm.recipe.rows)&&sm.recipe.rows.length);
-  if(withRec.length){
+  {
     const unitShort=u=>({min:'m.',s:'s.',h:'h.'}[u]||u||'');
     const aoa=[['Sample','Printed at','Recipe date','#','Step','Time','US','Temp','Notes']];
+    if(!withRec.length)aoa.push(['(no chemical recipes recorded yet)','','','','','','','','']);
     withRec.forEach(sm=>{
       const r=sm.recipe;
       aoa.push([sm.label,r.printedAt||'',r.recipeDateTime||'','','','','','','']);
@@ -1838,7 +1827,9 @@ function renderSamples(p){
   });
   order.forEach(({sm,si})=>{
     const nFiles=(sm.files||[]).length;
-    const hasLaser=hasValues(sm.laser), hasChem=hasValues(sm.chem);
+    const hasLaser=hasValues(sm.laser);
+    const hasRecipe=!!(sm.recipe&&(sm.recipe.rows||[]).length);
+    const hasChem=hasRecipe||hasValues(sm.chem);
     const el=document.createElement('div');
     el.className='stile';
     el.innerHTML=`
@@ -1848,14 +1839,14 @@ function renderSamples(p){
       </div>
       <div class="stile-btns">
         <button class="pbtn laser${hasLaser?' filled':''}" title="Laser parameters">L</button>
-        <button class="pbtn chem${(hasChem||sm.recipe)?' filled':''}" title="Chemical parameters${sm.recipe?' + printed recipe':''}">C${sm.recipe?'<span class="recdot"></span>':''}</button>
+        <button class="pbtn chem${hasChem?' filled':''}" title="Chemical recipe">R${hasRecipe&&sm.recipe.printedAt?'<span class="recdot" title="printed"></span>':''}</button>
         <button class="pbtn files${nFiles?' filled':''}" title="Photos &amp; files">${nFiles||'0'}</button>
       </div>`;
     // whole tile opens the full overview; the small buttons are shortcuts
     el.onclick=()=>showSample(p,si);
     const [bL,bC,bF]=el.querySelectorAll('.pbtn');
     bL.onclick=e=>{e.stopPropagation();showParams(p,si,'laser');};
-    bC.onclick=e=>{e.stopPropagation();showParams(p,si,'chem');};
+    bC.onclick=e=>{e.stopPropagation();showRecipe(p,si);};
     bF.onclick=e=>{e.stopPropagation();showFiles(p,si);};
     grid.appendChild(el);
   });
@@ -1918,6 +1909,84 @@ function fmtStamp(v){
   const d=new Date(v);
   return isNaN(d)?String(v):d.toLocaleString(undefined,
     {year:'numeric',month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'});
+}
+
+/* ---- edit / create a recipe in LabCore (same structure as the printer) ---- */
+function blankRecipe(sm){
+  return {printedAt:'',sampleName:sm.label||'',recipeDateTime:nowStamp(),
+          mode:'chem',logo:'',footer:'',rows:[]};
+}
+function nowStamp(){
+  const d=new Date(),p2=n=>String(n).padStart(2,'0');
+  return `${d.getFullYear()}-${p2(d.getMonth()+1)}-${p2(d.getDate())} ${p2(d.getHours())}:${p2(d.getMinutes())}`;
+}
+function editRecipe(p,si){
+  const sm=p.data.samples[si];
+  window._editRec=JSON.parse(JSON.stringify(sm.recipe||blankRecipe(sm)));
+  if(!window._editRec.rows.length)window._editRec.rows.push({step:'',time:'',unit:'min',us:false,temp:'',notes:''});
+  openModal(`<span class="tag chem">RECIPE</span> ${esc(sm.label)}`,`
+    <div class="two" style="margin-bottom:12px">
+      <div class="field"><label>Recipe date</label>
+        <input id="er_date" value="${esc(window._editRec.recipeDateTime||'')}"></div>
+      <div class="field"><label>Printed as (name on the printout)</label>
+        <input id="er_name" value="${esc(window._editRec.sampleName||sm.label)}"></div>
+    </div>
+    <label>Steps</label>
+    <table class="rectab" id="er_tab"><thead><tr>
+      <th>#</th><th>Step</th><th>Time</th><th>Unit</th><th>US</th><th>Temp</th><th>Notes</th><th></th>
+    </tr></thead><tbody id="er_rows"></tbody></table>
+    <button class="btn btn-out" style="margin-top:10px;padding:7px 14px;font-size:12px" onclick="addRecRow()">+ Add step</button>
+    <div class="field" style="margin-top:14px"><label>Notes / footer</label>
+      <textarea id="er_footer" rows="2">${esc(window._editRec.footer||'')}</textarea></div>
+    <div style="display:flex;gap:9px;margin-top:8px">
+      <button class="btn btn-acc" style="flex:1" onclick="saveRecipe(projects[selectedProjectIndex],${si})">Save recipe</button>
+      <button class="btn btn-out" onclick="showSample(projects[selectedProjectIndex],${si})">Cancel</button>
+    </div>`,true);
+  drawRecRows();
+}
+function drawRecRows(){
+  const tb=document.getElementById('er_rows'); if(!tb)return;
+  tb.innerHTML='';
+  window._editRec.rows.forEach((r,i)=>{
+    const tr=document.createElement('tr');
+    tr.innerHTML=`
+      <td class="num">${i+1}</td>
+      <td><input value="${esc(r.step||'')}" data-f="step" placeholder="e.g. NaOH 5%"></td>
+      <td><input value="${esc(r.time||'')}" data-f="time" style="width:64px"></td>
+      <td><select data-f="unit" style="width:74px">
+        ${['min','s','h'].map(u=>`<option${(r.unit||'min')===u?' selected':''}>${u}</option>`).join('')}
+      </select></td>
+      <td class="num"><input type="checkbox" data-f="us" ${r.us?'checked':''} style="width:auto"></td>
+      <td><input value="${esc(r.temp||'')}" data-f="temp" style="width:74px" placeholder="20C"></td>
+      <td><input value="${esc(r.notes||'')}" data-f="notes"></td>
+      <td><button class="taskdel" title="Remove step">✕</button></td>`;
+    tr.querySelectorAll('[data-f]').forEach(el=>{
+      const f=el.dataset.f;
+      el.onchange=()=>{window._editRec.rows[i][f]=(el.type==='checkbox')?el.checked:el.value;};
+      el.oninput =()=>{window._editRec.rows[i][f]=(el.type==='checkbox')?el.checked:el.value;};
+    });
+    tr.querySelector('.taskdel').onclick=()=>{window._editRec.rows.splice(i,1);drawRecRows();};
+    tb.appendChild(tr);
+  });
+}
+function addRecRow(){
+  window._editRec.rows.push({step:'',time:'',unit:'min',us:false,temp:'',notes:''});
+  drawRecRows();
+}
+async function saveRecipe(p,si){
+  const sm=p.data.samples[si];
+  const rec=window._editRec;
+  rec.recipeDateTime=document.getElementById('er_date').value.trim();
+  rec.sampleName=document.getElementById('er_name').value.trim()||sm.label;
+  rec.footer=document.getElementById('er_footer').value.trim();
+  rec.mode='chem';
+  rec.rows=rec.rows.filter(r=>(r.step||'').trim()).map((r,i)=>({
+    index:i+1,step:r.step,time:r.time||'',unit:r.unit||'min',
+    us:!!r.us,temp:r.temp||'',notes:r.notes||''}));
+  if(!rec.rows.length){toast('Add at least one step',true);return;}
+  sm.recipe=rec;
+  await saveProject(p); await writeParamsExcel(p);
+  toast('Recipe saved'); showSample(p,si); renderSamples(p);
 }
 
 /* browse recipes already printed, and attach one to this sample */
@@ -2004,25 +2073,19 @@ function showSample(p,si){
 
   openModal(`<span class="tag file">SAMPLE</span> ${esc(sm.label)}
       <span style="font-weight:500;color:var(--mute);font-size:13px">${esc(sm.material||'')}</span>`,
-    `<div class="subgrid" style="gap:16px">
-       <div>
-         <h3 style="font-size:12px;letter-spacing:1.3px;text-transform:uppercase;margin-bottom:10px">
-           <span class="tag laser">LASER</span> Parameters</h3>
-         ${paramRows(sm,'laser')}
-       </div>
-       <div>
-         <h3 style="font-size:12px;letter-spacing:1.3px;text-transform:uppercase;margin-bottom:10px">
-           <span class="tag chem">CHEM</span> Parameters</h3>
-         ${paramRows(sm,'chem')}
-       </div>
-     </div>
+    `<h3 style="font-size:12px;letter-spacing:1.3px;text-transform:uppercase;margin-bottom:10px">
+       <span class="tag laser">LASER</span> Parameters</h3>
+     <div class="subgrid" style="gap:0 22px">${paramRows(sm,'laser')}</div>
+     ${legacyChemHtml(sm)}
 
      <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin:20px 0 8px">
        <h3 style="font-size:12px;letter-spacing:1.3px;text-transform:uppercase;margin:0">
          <span class="tag chem">RECIPE</span> Chemical process</h3>
-       <span style="display:flex;gap:7px">
+       <span style="display:flex;gap:7px;flex-wrap:wrap">
+         <button class="btn btn-acc" style="padding:6px 12px;font-size:12px"
+           onclick="editRecipe(projects[selectedProjectIndex],${si})">${sm.recipe?'✎ Edit':'+ New recipe'}</button>
          <button class="btn btn-out" style="padding:6px 12px;font-size:12px"
-           onclick="pickRecipe(projects[selectedProjectIndex],${si})">${sm.recipe?'Change':'+ Attach printed recipe'}</button>
+           onclick="pickRecipe(projects[selectedProjectIndex],${si})">⇩ From printer log</button>
          ${sm.recipe?`<button class="btn btn-out" style="padding:6px 12px;font-size:12px"
            onclick="detachRecipe(projects[selectedProjectIndex],${si})">Remove</button>`:''}
        </span>
@@ -2056,21 +2119,43 @@ async function openSampleFolder(p,si){
 /* modal: show one parameter set for a sample */
 function showParams(p,si,which){
   const sm=p.data.samples[si];
-  const laser=which==='laser';
-  const recipeBlock=(!laser)?`
-    <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin:18px 0 8px">
-      <h3 style="font-size:12px;letter-spacing:1.3px;text-transform:uppercase;margin:0">
-        <span class="tag chem">RECIPE</span> Chemical process</h3>
-      <button class="btn btn-out" style="padding:6px 12px;font-size:12px"
-        onclick="pickRecipe(projects[selectedProjectIndex],${si})">${sm.recipe?'Change':'+ Attach'}</button>
-    </div>${recipeTableHtml(sm.recipe)}`:'';
-  const body=paramRows(sm,which)+recipeBlock+
+  if(which!=='laser')return showRecipe(p,si);
+  const body=paramRows(sm,'laser')+
     `<div style="display:flex;gap:9px;margin-top:16px">
        <button class="btn btn-acc" style="flex:1"
          onclick="closeModal();openSampleForm(projects[selectedProjectIndex],${si})">✎ Edit parameters</button>
        <button class="btn btn-out" onclick="showSample(projects[selectedProjectIndex],${si})">View all</button>
      </div>`;
-  openModal(`<span class="tag ${laser?'laser':'chem'}">${laser?'LASER':'CHEM'}</span> ${esc(sm.label)}`,body,!laser&&!!sm.recipe);
+  openModal(`<span class="tag laser">LASER</span> ${esc(sm.label)}`,body);
+}
+
+/* modal: the sample's chemical recipe */
+function showRecipe(p,si){
+  const sm=p.data.samples[si];
+  openModal(`<span class="tag chem">RECIPE</span> ${esc(sm.label)}`,
+    recipeTableHtml(sm.recipe)+legacyChemHtml(sm)+
+    `<div style="display:flex;gap:9px;margin-top:16px;flex-wrap:wrap">
+       <button class="btn btn-acc" style="flex:1" onclick="editRecipe(projects[selectedProjectIndex],${si})">
+         ${sm.recipe?'✎ Edit recipe':'+ New recipe'}</button>
+       <button class="btn btn-out" onclick="pickRecipe(projects[selectedProjectIndex],${si})">⇩ From printer log</button>
+       <button class="btn btn-out" onclick="showSample(projects[selectedProjectIndex],${si})">View all</button>
+     </div>`,true);
+}
+
+/* older samples may still hold the retired chemical fields — show them read-only
+   so nothing recorded before the switch to recipes is lost */
+function legacyChemHtml(sm){
+  const c=sm.chem||{};
+  const rows=[['Solution / electrolyte',c.solution],['Concentration',c.concentration,c.concentration_u],
+    ['pH',c.ph],['Temperature (°C)',c.temp],['Voltage',c.voltage,c.voltage_u],
+    ['Current density',c.current,c.current_u],['Duration',c.duration,c.duration_u],
+    ['Process',c.process],['Notes',c.notes]]
+    .filter(([k,v])=>v!==undefined&&v!==''&&v!==null);
+  if(!rows.length)return '';
+  return `<details style="margin-top:16px">
+      <summary>Legacy chemical parameters (recorded before recipes)</summary>
+      <div style="margin-top:8px">${rows.map(([k,v,u])=>kvu(k,v,u)).join('')}</div>
+    </details>`;
 }
 
 /* modal: photos / files for a sample */
@@ -2148,7 +2233,7 @@ function openSampleForm(p,si){
           <div class="field"><label>Material</label><input id="s_material" value="${esc(s.material||'')}" placeholder="Ti-6Al-4V"></div>
         </div>
       </div>
-      <div class="subgrid">
+      <div>
         <div class="panelbox">
           <h3><span class="tag laser">LASER</span> Parameters</h3>
           ${prow('Wavelength','l_wavelength',s.laser?.wavelength,'l_wavelength_u',s.laser?.wavelength_u,['nm','µm'],'nm')}
@@ -2164,20 +2249,6 @@ function openSampleForm(p,si){
             <div class="field"><label>Source / model</label><input id="l_source" value="${esc(s.laser?.source||'')}" placeholder="e.g. fiber, 1064 nm"></div>
           </div>
           <div class="field"><label>Notes</label><textarea id="l_notes" rows="2">${esc(s.laser?.notes||'')}</textarea></div>
-        </div>
-        <div class="panelbox">
-          <h3><span class="tag chem">CHEM</span> Parameters</h3>
-          <div class="field"><label>Solution / electrolyte</label><input id="c_sol" value="${esc(s.chem?.solution||'')}"></div>
-          ${prow('Concentration','c_conc',s.chem?.concentration,'c_conc_u',s.chem?.concentration_u,['%','M','mM','g/L'],'M')}
-          <div class="two">
-            <div class="field"><label>pH</label><input id="c_ph" value="${esc(s.chem?.ph||'')}"></div>
-            <div class="field"><label>Temp (°C)</label><input id="c_temp" value="${esc(s.chem?.temp||'')}"></div>
-          </div>
-          ${prow('Voltage','c_voltage',s.chem?.voltage,'c_voltage_u',s.chem?.voltage_u,['V','mV'],'V')}
-          ${prow('Current density','c_current',s.chem?.current,'c_current_u',s.chem?.current_u,['mA/cm²','A/cm²'],'mA/cm²')}
-          ${prow('Duration','c_dur',s.chem?.duration,'c_dur_u',s.chem?.duration_u,['s','min','h'],'min')}
-          <div class="field"><label>Process</label><input id="c_process" value="${esc(s.chem?.process||'')}" placeholder="e.g. etching, anodizing, cleaning"></div>
-          <div class="field"><label>Notes</label><textarea id="c_notes" rows="2">${esc(s.chem?.notes||'')}</textarea></div>
         </div>
       </div>
       <button class="btn btn-acc" id="saveS" style="width:200px">${editing?'Save changes':'Add sample'}</button>
@@ -2198,14 +2269,8 @@ function openSampleForm(p,si){
         spot:v('l_spot'),spot_u:v('l_spot_u'),
         hatch:v('l_hatch'),hatch_u:v('l_hatch_u'),
         passes:v('l_passes'),source:v('l_source'),notes:v('l_notes')},
-      chem:{
-        solution:v('c_sol'),
-        concentration:v('c_conc'),concentration_u:v('c_conc_u'),
-        ph:v('c_ph'),temp:v('c_temp'),
-        voltage:v('c_voltage'),voltage_u:v('c_voltage_u'),
-        current:v('c_current'),current_u:v('c_current_u'),
-        duration:v('c_dur'),duration_u:v('c_dur_u'),
-        process:v('c_process'),notes:v('c_notes')},
+      recipe:editing?s.recipe:undefined,          // chemical process = the recipe
+      chem:editing?s.chem:undefined,               // legacy fields kept, never edited here
       folderId:editing?s.folderId:undefined,
       created:editing?(s.created||new Date().toISOString()):new Date().toISOString(),
       files:editing?(s.files||[]):[]
