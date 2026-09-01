@@ -41,8 +41,10 @@
   }
   .logo{display:flex;align-items:center;gap:12px;cursor:pointer}
   .logo .mark{
-    width:34px;height:34px;background:var(--acc);border-radius:7px;
-    display:grid;place-items:center;font-weight:900;color:#fff;
+    width:36px;height:36px;border-radius:9px;flex-shrink:0;
+    background-image:url("data:image/webp;base64,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");
+    background-size:cover;background-position:center;
+    box-shadow:0 1px 4px rgba(16,24,40,.22);
   }
   .logo h1{font-size:18px;font-weight:900;letter-spacing:2px}
   .logo span{color:var(--mute);font-size:11px;letter-spacing:3px;display:block}
@@ -423,6 +425,18 @@
     font-size:12px;padding:2px 5px;border-radius:5px}
   .lcard .ld:hover{background:#fdeceb;color:var(--warn)}
 
+  .xlsx-btn{display:flex;align-items:center;gap:13px;width:100%;
+    padding:14px 16px;border-radius:10px;text-decoration:none;
+    background:linear-gradient(135deg,#0e9f8c,#0b8676);color:#fff;
+    box-shadow:0 2px 8px rgba(14,159,140,.30);transition:.15s}
+  .xlsx-btn:hover{transform:translateY(-1px);box-shadow:0 6px 16px rgba(14,159,140,.42)}
+  .xlsx-ico{display:grid;place-items:center;width:40px;height:40px;flex-shrink:0;
+    background:rgba(255,255,255,.20);border-radius:9px}
+  .xlsx-txt{display:flex;flex-direction:column;line-height:1.35;min-width:0}
+  .xlsx-txt b{font-size:15px;font-weight:800;letter-spacing:.2px}
+  .xlsx-txt small{font-size:11.5px;opacity:.88}
+  .xlsx-arrow{margin-left:auto;font-size:17px;opacity:.85}
+
   .stage-head{display:flex;justify-content:space-between;align-items:center;
     font-size:11px;font-weight:800;letter-spacing:.4px;text-transform:uppercase;
     color:var(--mute);margin:8px 0 5px}
@@ -461,7 +475,7 @@
 
 <header>
   <div class="logo" id="homeLink">
-    <div class="mark">L</div>
+    <div class="mark"></div>
     <div>
       <h1>LABCORE</h1>
       <span class="mono">DATA / PROJECT SYSTEM</span>
@@ -493,6 +507,19 @@
 </div>
 
 <div id="toast" class="toast"></div>
+
+<div class="modal-bg" id="confirmBg" style="z-index:400">
+  <div class="modal" style="max-width:420px">
+    <div class="modal-head"><h3 id="confirmTitle"></h3></div>
+    <div class="modal-body">
+      <p id="confirmMsg" style="font-size:14px;line-height:1.6;color:var(--ink);margin-bottom:20px"></p>
+      <div style="display:flex;gap:9px">
+        <button class="btn btn-out" style="flex:1" id="confirmNo">Cancel</button>
+        <button class="btn" style="flex:1;background:var(--warn);color:#fff" id="confirmYes">Delete</button>
+      </div>
+    </div>
+  </div>
+</div>
 
 <div class="modal-bg" id="modalBg">
   <div class="modal">
@@ -2014,8 +2041,18 @@ function renderProject(){
           </span>
         </div>
         ${d.excelLink
-          ?`<a class="filelink" href="${d.excelLink}" target="_blank">📊 parameters.xlsx — open in Drive</a>`
-          :'<div class="empty-note" style="padding:10px">Spreadsheet appears after the first sample is saved.</div>'}
+          ?`<a class="xlsx-btn" href="${d.excelLink}" target="_blank" title="Open parameters.xlsx in Google Drive">
+              <span class="xlsx-ico">
+                <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor"
+                     stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <rect x="3" y="3" width="18" height="18" rx="2"></rect>
+                  <path d="M3 9h18M3 15h18M9 3v18M15 3v18"></path>
+                </svg>
+              </span>
+              <span class="xlsx-txt"><b>Parameters</b><small>laser &amp; recipes · open in Drive</small></span>
+              <span class="xlsx-arrow">↗</span>
+            </a>`
+          :'<div class="empty-note" style="padding:10px">The parameters sheet appears once the first sample is saved.</div>'}
         <div style="display:flex;gap:8px;margin:14px 0 8px">
           <input type="file" id="pj_drawin" multiple style="flex:1">
           <button class="btn btn-blue" id="pj_drawup" style="white-space:nowrap">Add</button>
@@ -2135,6 +2172,18 @@ function stageRender(key, listId){
 }
 function staged(key){ return fileStage[key] || []; }
 function stageClear(key){ fileStage[key] = []; }
+
+/* ---------- confirmation dialog (sits above the main popup) ---------- */
+function askConfirm(title,message,okLabel,onYes){
+  document.getElementById('confirmTitle').textContent=title;
+  document.getElementById('confirmMsg').textContent=message;
+  const yes=document.getElementById('confirmYes');
+  yes.textContent=okLabel||'Delete';
+  const bg=document.getElementById('confirmBg');
+  yes.onclick=()=>{bg.classList.remove('open');onYes();};
+  document.getElementById('confirmNo').onclick=()=>bg.classList.remove('open');
+  bg.classList.add('open');
+}
 
 /* ---------- modal helpers ---------- */
 function openModal(title,html,wide){
@@ -2830,11 +2879,20 @@ async function pickRecipe(p,si,queryOverride){
       ${esc(e.message||String(e))}</div>`;
   }
 }
-async function detachRecipe(p,si){
+function detachRecipe(p,si){
   const sm=p.data.samples[si];
-  delete sm.recipe;
-  await saveProject(p); await writeParamsExcel(p);
-  toast('Recipe removed'); showSample(p,si); renderSamples(p);
+  const n=(sm.recipe&&sm.recipe.rows?sm.recipe.rows.length:0);
+  askConfirm('Remove recipe?',
+    `This removes the chemical recipe (${n} step${n===1?'':'s'}) from sample "${sm.label}". `+
+    `The sample and its files are not affected, and any printed copy stays in the master log. `+
+    `This cannot be undone.`,
+    'Remove recipe',
+    async()=>{
+      delete sm.recipe;
+      try{ await saveProject(p); await writeParamsExcel(p); }
+      catch(e){ toast('Could not save: '+e.message,true); return; }
+      toast('Recipe removed'); showSample(p,si); renderSamples(p);
+    });
 }
 
 /* ---------- INLINE LASER EDITING (inside the popup) ---------- */
