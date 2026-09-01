@@ -2143,7 +2143,7 @@ function openModal(title,html,wide){
   document.querySelector('#modalBg .modal').style.maxWidth=wide?'900px':'640px';
   document.getElementById('modalBg').classList.add('open');
 }
-function closeModal(){document.getElementById('modalBg').classList.remove('open');}
+function closeModal(){laserEditing=false;document.getElementById('modalBg').classList.remove('open');}
 /* popups close only via the ✕ button (or an explicit Cancel), so a stray
    click or keypress can never discard a half-finished recipe */
 
@@ -2837,11 +2837,85 @@ async function detachRecipe(p,si){
   toast('Recipe removed'); showSample(p,si); renderSamples(p);
 }
 
+/* ---------- INLINE LASER EDITING (inside the popup) ---------- */
+let laserEditing = false;          // true while the laser fields are unlocked
+
+/* the same rows as paramRows('laser'), but as editable fields */
+function laserEditHtml(sm){
+  const L = sm.laser || {};
+  return `
+    <div class="two">
+      <div class="field"><label>Sample label</label>
+        <input id="s_label" value="${esc(sm.label||'')}"></div>
+      <div class="field"><label>Material</label>
+        <input id="s_material" value="${esc(sm.material||'')}"></div>
+    </div>
+    <div class="subgrid" style="gap:0 22px">
+      <div>
+        ${prow('Wavelength','l_wavelength',L.wavelength,'l_wavelength_u',L.wavelength_u,['nm','µm'],'nm')}
+        ${prow('Average power','l_power',L.power,'l_power_u',L.power_u,['mW','W'],'W')}
+        ${prow('Pulse energy','l_energy',L.energy,'l_energy_u',L.energy_u,['nJ','µJ','mJ'],'µJ')}
+        ${prow('Frequency / rep. rate','l_freq',L.frequency,'l_freq_u',L.frequency_u,['Hz','kHz','MHz'],'kHz')}
+        ${prow('Pulse duration','l_pulse',L.pulse,'l_pulse_u',L.pulse_u,['fs','ps','ns','µs'],'ns')}
+      </div>
+      <div>
+        ${prow('Scan speed','l_speed',L.speed,'l_speed_u',L.speed_u,['mm/s','m/s'],'mm/s')}
+        ${prow('Spot size','l_spot',L.spot,'l_spot_u',L.spot_u,['µm','mm'],'µm')}
+        ${prow('Hatch / line spacing','l_hatch',L.hatch,'l_hatch_u',L.hatch_u,['µm','mm'],'µm')}
+        <div class="field"><label>Passes / repetitions</label><input id="l_passes" value="${esc(L.passes||'')}"></div>
+        <div class="field"><label>Source / model</label><input id="l_source" value="${esc(L.source||'')}"></div>
+      </div>
+    </div>
+    <div class="field"><label>Notes</label><textarea id="l_notes" rows="2">${esc(L.notes||'')}</textarea></div>`;
+}
+/* buttons shown above the laser block, depending on mode */
+function laserBtns(si,back){
+  return laserEditing
+    ? `<span style="display:flex;gap:7px">
+         <button class="btn btn-acc" style="padding:6px 12px;font-size:12px"
+           onclick="saveLaserInline(projects[selectedProjectIndex],${si},'${back}')">Save</button>
+         <button class="btn btn-out" style="padding:6px 12px;font-size:12px"
+           onclick="cancelLaserInline(projects[selectedProjectIndex],${si},'${back}')">Cancel</button>
+       </span>`
+    : `<button class="btn btn-out" style="padding:6px 12px;font-size:12px"
+         onclick="startLaserInline(projects[selectedProjectIndex],${si},'${back}')">✎ Edit</button>`;
+}
+function reopen(p,si,back){ back==='laser' ? showParams(p,si,'laser') : showSample(p,si); }
+function startLaserInline(p,si,back){ laserEditing=true;  reopen(p,si,back); }
+function cancelLaserInline(p,si,back){ laserEditing=false; reopen(p,si,back); }
+async function saveLaserInline(p,si,back){
+  const sm=p.data.samples[si];
+  const label=(document.getElementById('s_label').value||'').trim();
+  if(!label){toast('Sample label cannot be empty',true);return;}
+  if(p.data.samples.some((x,i)=>i!==si&&(x.label||'').toLowerCase()===label.toLowerCase())){
+    toast('Another sample already uses that label',true);return;}
+  sm.label=label;
+  sm.material=document.getElementById('s_material').value.trim();
+  sm.laser={
+    wavelength:v('l_wavelength'),wavelength_u:v('l_wavelength_u'),
+    power:v('l_power'),power_u:v('l_power_u'),
+    energy:v('l_energy'),energy_u:v('l_energy_u'),
+    frequency:v('l_freq'),frequency_u:v('l_freq_u'),
+    pulse:v('l_pulse'),pulse_u:v('l_pulse_u'),
+    speed:v('l_speed'),speed_u:v('l_speed_u'),
+    spot:v('l_spot'),spot_u:v('l_spot_u'),
+    hatch:v('l_hatch'),hatch_u:v('l_hatch_u'),
+    passes:v('l_passes'),source:v('l_source'),notes:v('l_notes')};
+  try{
+    await saveProject(p); await writeParamsExcel(p);
+    toast('Laser parameters saved');
+  }catch(e){ toast('Could not save: '+e.message,true); return; }
+  laserEditing=false;
+  renderSamples(p);
+  reopen(p,si,back);
+}
+
 /* ---------- FULL SAMPLE OVERVIEW (click the tile) ---------- */
 function showSample(p,si){
   // refresh this sample's files from Drive, then redraw the modal if it changed
-  syncSampleFiles(p,si,true).then(changed=>{
-    if(changed&&document.getElementById('modalBg').classList.contains('open')){
+  // (never while the fields are unlocked — that would discard typing)
+  if(!laserEditing) syncSampleFiles(p,si,true).then(changed=>{
+    if(changed&&!laserEditing&&document.getElementById('modalBg').classList.contains('open')){
       showSample(p,si); renderSamples(p);
     }
   });
@@ -2862,9 +2936,14 @@ function showSample(p,si){
 
   openModal(`<span class="tag file">SAMPLE</span> ${esc(sm.label)}
       <span style="font-weight:500;color:var(--mute);font-size:13px">${esc(sm.material||'')}</span>`,
-    `<h3 style="font-size:12px;letter-spacing:1.3px;text-transform:uppercase;margin-bottom:10px">
-       <span class="tag laser">LASER</span> Parameters</h3>
-     <div class="subgrid" style="gap:0 22px">${paramRows(sm,'laser')}</div>
+    `<div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:10px">
+       <h3 style="font-size:12px;letter-spacing:1.3px;text-transform:uppercase;margin:0">
+         <span class="tag laser">LASER</span> Parameters</h3>
+       ${laserBtns(si,'sample')}
+     </div>
+     ${laserEditing
+        ? laserEditHtml(sm)
+        : `<div class="subgrid" style="gap:0 22px">${paramRows(sm,'laser')}</div>`}
      ${legacyChemHtml(sm)}
 
      <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin:20px 0 8px">
@@ -2886,7 +2965,7 @@ function showSample(p,si){
      ${thumbs}
 
      <div style="display:flex;gap:9px;flex-wrap:wrap;margin-top:20px">
-       <button class="btn btn-acc" onclick="closeModal();openSampleForm(projects[selectedProjectIndex],${si})">✎ Edit sample</button>
+       <button class="btn btn-acc" onclick="startLaserInline(projects[selectedProjectIndex],${si},'sample')">✎ Edit sample</button>
        <button class="btn btn-blue" onclick="openSampleFolder(projects[selectedProjectIndex],${si})">📁 Open photos folder</button>
        <button class="btn btn-out" onclick="showFiles(projects[selectedProjectIndex],${si})">⬆ Upload files</button>
      </div>`,true);
@@ -2909,13 +2988,20 @@ async function openSampleFolder(p,si){
 function showParams(p,si,which){
   const sm=p.data.samples[si];
   if(which!=='laser')return showRecipe(p,si);
-  const body=paramRows(sm,'laser')+
-    `<div style="display:flex;gap:9px;margin-top:16px">
-       <button class="btn btn-acc" style="flex:1"
-         onclick="closeModal();openSampleForm(projects[selectedProjectIndex],${si})">✎ Edit parameters</button>
-       <button class="btn btn-out" onclick="showSample(projects[selectedProjectIndex],${si})">View all</button>
-     </div>`;
-  openModal(`<span class="tag laser">LASER</span> ${esc(sm.label)}`,body);
+  const body = (laserEditing ? laserEditHtml(sm) : paramRows(sm,'laser')) +
+    (laserEditing
+      ? `<div style="display:flex;gap:9px;margin-top:16px">
+           <button class="btn btn-acc" style="flex:1"
+             onclick="saveLaserInline(projects[selectedProjectIndex],${si},'laser')">Save changes</button>
+           <button class="btn btn-out"
+             onclick="cancelLaserInline(projects[selectedProjectIndex],${si},'laser')">Cancel</button>
+         </div>`
+      : `<div style="display:flex;gap:9px;margin-top:16px">
+           <button class="btn btn-acc" style="flex:1"
+             onclick="startLaserInline(projects[selectedProjectIndex],${si},'laser')">✎ Edit parameters</button>
+           <button class="btn btn-out" onclick="showSample(projects[selectedProjectIndex],${si})">View all</button>
+         </div>`);
+  openModal(`<span class="tag laser">LASER</span> ${esc(sm.label)}`,body,laserEditing);
 }
 
 /* modal: the sample's chemical recipe */
