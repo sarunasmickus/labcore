@@ -423,6 +423,20 @@
     font-size:12px;padding:2px 5px;border-radius:5px}
   .lcard .ld:hover{background:#fdeceb;color:var(--warn)}
 
+  .stage-head{display:flex;justify-content:space-between;align-items:center;
+    font-size:11px;font-weight:800;letter-spacing:.4px;text-transform:uppercase;
+    color:var(--mute);margin:8px 0 5px}
+  .stage-clear{background:transparent;color:var(--mute);font-size:11px;font-weight:700;
+    text-decoration:underline;padding:2px 4px}
+  .stage-clear:hover{color:var(--warn)}
+  .stage-row{display:flex;align-items:center;gap:8px;padding:6px 9px;background:#fff;
+    border:1px solid var(--line);border-radius:6px;margin-bottom:4px;font-size:12px}
+  .stage-n{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--ink)}
+  .stage-s{color:var(--mute);font-size:11px;white-space:nowrap}
+  .stage-x{background:transparent;color:var(--mute);font-size:12px;padding:1px 5px;border-radius:4px;line-height:1}
+  .stage-x:hover{background:#fdeceb;color:var(--warn)}
+  .stage-list{max-height:150px;overflow-y:auto}
+
   .syncstate{display:inline-flex;align-items:center;gap:6px;font-size:11px;font-weight:700;
     transition:opacity .4s;white-space:nowrap}
   .syncstate.busy{color:var(--mute)}
@@ -1796,7 +1810,7 @@ document.getElementById('newProjectBtn').onclick=()=>{
          Uploaded to the project's <code>Drawings</code> folder.
        </p>
        <input type="file" id="np_drawings" multiple>
-       <div id="np_filelist" style="margin-top:9px;font-size:12px;color:var(--mute);overflow-y:auto;max-height:90px"></div>
+       <div id="np_filelist" class="stage-list"></div>
      </div>
 
      <!-- 4 — summary & create -->
@@ -1818,12 +1832,8 @@ document.getElementById('newProjectBtn').onclick=()=>{
     const el=document.getElementById(id);
     el.oninput=updateNewSummary; el.onchange=updateNewSummary;
   });
-  document.getElementById('np_drawings').onchange=(e)=>{
-    const f=[...e.target.files];
-    document.getElementById('np_filelist').innerHTML=
-      f.length?`<b>${f.length} file(s):</b> `+f.map(x=>esc(x.name)).join(', '):'';
-    updateNewSummary();
-  };
+  stageClear('npDraw');
+  stageInit('npDraw','np_drawings','np_filelist');
   updateNewSummary();
   document.getElementById('np_save').onclick=async()=>{
     // ---- validation: every required field must be filled ----
@@ -1866,7 +1876,7 @@ document.getElementById('newProjectBtn').onclick=()=>{
         drawings:[],
         created:new Date().toISOString(),samples:[]};
       // upload any drawings into a Drawings subfolder
-      const drawFiles=document.getElementById('np_drawings').files;
+      const drawFiles=staged('npDraw');
       if(drawFiles.length){
         const dfolder=await ensureSubfolder('Drawings',folderId);
         for(const f of drawFiles){
@@ -1898,8 +1908,7 @@ function updateNewSummary(){
         dl=g('np_deadline'),desc=g('np_desc');
   const people=(window._newPeople||[]).length;
   const tasks=(window._newTasks||[]).length;
-  const filesEl=document.getElementById('np_drawings');
-  const files=filesEl&&filesEl.files?filesEl.files.length:0;
+  const files=staged('npDraw').length;
   const val=(v,label)=>v?`<span class="v">${esc(label||v)}</span>`:'<span class="v sum-miss">missing</span>';
   const dlTxt=dl?deadlineInfo(dl).label:'';
   el.innerHTML=`
@@ -2011,6 +2020,7 @@ function renderProject(){
           <input type="file" id="pj_drawin" multiple style="flex:1">
           <button class="btn btn-blue" id="pj_drawup" style="white-space:nowrap">Add</button>
         </div>
+        <div id="pj_drawstage" class="stage-list"></div>
         <div class="gallery" id="pj_drawgal"></div>
       </div>
 
@@ -2027,6 +2037,8 @@ function renderProject(){
     </div>`;
   document.getElementById('editProjectBtn').onclick=()=>openProjectEdit(p);
   document.getElementById('addSampleBtn').onclick=()=>newSampleForm(p);
+  stageClear('pjDraw');
+  stageInit('pjDraw','pj_drawin','pj_drawstage');
   document.getElementById('pj_drawup').onclick=()=>uploadDrawings(p);
   document.getElementById('pj_sync').onclick=()=>autoSync(p,true);
   renderProjectTasks(p);
@@ -2077,6 +2089,52 @@ function setSyncState(kind,text){
   if(kind==='ok')setTimeout(()=>{if(el.classList.contains('ok'))el.style.opacity='.55';},2500);
   else el.style.opacity='1';
 }
+
+/* ============ FILE STAGING ============
+   Browser file inputs REPLACE the selection each time you use them.
+   These helpers keep a growing list per upload area instead, so you can
+   pick files in several goes and remove any you chose by mistake before
+   anything is sent to Drive.                                            */
+const fileStage = {};
+function stageInit(key, inputId, listId){
+  fileStage[key] = fileStage[key] || [];
+  const inp = document.getElementById(inputId);
+  if(!inp) return;
+  inp.onchange = e => {
+    const arr = fileStage[key];
+    [...e.target.files].forEach(f=>{
+      const dup = arr.some(x=>x.name===f.name && x.size===f.size && x.lastModified===f.lastModified);
+      if(!dup) arr.push(f);
+    });
+    e.target.value = '';            // lets you re-pick the same file later
+    stageRender(key, listId);
+    if(typeof updateNewSummary==='function') updateNewSummary();
+  };
+  stageRender(key, listId);
+}
+function stageRender(key, listId){
+  const el = document.getElementById(listId); if(!el) return;
+  const arr = fileStage[key] || [];
+  if(!arr.length){ el.innerHTML=''; return; }
+  const kb = n => n<1024 ? n+' B' : (n<1048576 ? (n/1024).toFixed(0)+' KB' : (n/1048576).toFixed(1)+' MB');
+  el.innerHTML = `<div class="stage-head">${arr.length} file(s) ready to upload
+      <button type="button" class="stage-clear" data-k="${key}" data-l="${listId}">clear all</button></div>` +
+    arr.map((f,i)=>`<div class="stage-row">
+        <span class="stage-n" title="${esc(f.name)}">${esc(f.name)}</span>
+        <span class="stage-s">${kb(f.size)}</span>
+        <button type="button" class="stage-x" data-k="${key}" data-l="${listId}" data-i="${i}" title="Remove">✕</button>
+      </div>`).join('');
+  el.querySelectorAll('.stage-x').forEach(b=>{
+    b.onclick=()=>{ fileStage[b.dataset.k].splice(+b.dataset.i,1);
+      stageRender(b.dataset.k,b.dataset.l);
+      if(typeof updateNewSummary==='function') updateNewSummary(); };
+  });
+  const ca=el.querySelector('.stage-clear');
+  if(ca)ca.onclick=()=>{ fileStage[ca.dataset.k]=[]; stageRender(ca.dataset.k,ca.dataset.l);
+      if(typeof updateNewSummary==='function') updateNewSummary(); };
+}
+function staged(key){ return fileStage[key] || []; }
+function stageClear(key){ fileStage[key] = []; }
 
 /* ---------- modal helpers ---------- */
 function openModal(title,html,wide){
@@ -2239,17 +2297,19 @@ function renderDrawings(p){
   });
 }
 async function uploadDrawings(p){
-  const inp=document.getElementById('pj_drawin');
-  if(!inp.files.length){toast('Choose file(s) first',true);return;}
+  const files=staged('pjDraw');
+  if(!files.length){toast('Choose file(s) first',true);return;}
   const btn=document.getElementById('pj_drawup');btn.innerHTML='<span class="loader"></span>';
   try{
     const dfolder=await ensureSubfolder('Drawings',p.folderId);
     p.data.drawings=p.data.drawings||[];
-    for(const f of inp.files){
+    for(const f of files){
       const r=await uploadFile(f,dfolder);
       p.data.drawings.push({id:r.id,name:r.name,link:r.webViewLink,thumb:r.thumbnailLink});
     }
-    await saveProject(p);renderDrawings(p);inp.value='';toast('Drawings added');
+    await saveProject(p);renderDrawings(p);
+    stageClear('pjDraw'); stageRender('pjDraw','pj_drawstage');
+    toast('Drawings added');
   }catch(e){toast('Error: '+e.message,true);}
   btn.textContent='Add';
 }
@@ -2898,14 +2958,17 @@ function showFiles(p,si){
   });
   const sm=p.data.samples[si];
   openModal(`<span class="tag file">FILES</span> ${esc(sm.label)}`,`
-    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:12px">
+    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
       <input type="file" id="fileIn_${si}" multiple style="flex:1;min-width:200px">
       <select id="fileType_${si}" style="width:auto">
         <option value="photo">Photo</option><option value="drawing">Drawing</option><option value="report">Report</option>
       </select>
       <button class="btn btn-blue" id="up_${si}">Upload</button>
     </div>
-    <div class="gallery" id="gal_${si}"></div>`);
+    <div id="stage_${si}" class="stage-list"></div>
+    <div style="margin-top:14px" class="gallery" id="gal_${si}"></div>`);
+  stageClear('smp'+si);
+  stageInit('smp'+si,'fileIn_'+si,'stage_'+si);
   document.getElementById('up_'+si).onclick=()=>doUpload(p,si);
   renderGallery(p,si);
 }
@@ -2929,16 +2992,16 @@ function renderGallery(p,si){
 }
 
 async function doUpload(p,si){
-  const inp=document.getElementById('fileIn_'+si);
+  const files=staged('smp'+si);
   const type=document.getElementById('fileType_'+si).value;
-  if(!inp.files.length){toast('Choose file(s) first',true);return;}
+  if(!files.length){toast('Choose file(s) first',true);return;}
   const btn=document.getElementById('up_'+si);btn.innerHTML='<span class="loader"></span>';
   const s=p.data.samples[si];s.files=s.files||[];
   try{
     // files grouped into a subfolder named after the sample, e.g. ProjectFolder/S-01/
     const sampleFolder=await ensureSubfolder('Sample_'+s.label.replace(/[^\w-]+/g,'_'),p.folderId);
     s.folderId=sampleFolder;
-    for(const file of inp.files){
+    for(const file of files){
       const r=await uploadFile(file,sampleFolder);
       s.files.push({id:r.id,name:r.name,type,link:r.webViewLink,thumb:r.thumbnailLink});
     }
@@ -2946,7 +3009,7 @@ async function doUpload(p,si){
     renderGallery(p,si);
     renderSamples(p);            // refresh the file-count bubble on the tile
     toast('Uploaded to '+s.label+' folder');
-    inp.value='';
+    stageClear('smp'+si); stageRender('smp'+si,'stage_'+si);
   }catch(e){toast('Upload error: '+e.message,true);}
   btn.textContent='Upload';
 }
@@ -2964,7 +3027,7 @@ function newSampleForm(p){
     <div class="field">
       <label>Photos / files <span style="text-transform:none;letter-spacing:0;font-weight:400">(optional)</span></label>
       <input type="file" id="ns_files" multiple>
-      <div id="ns_filelist" style="margin-top:8px;font-size:12px;color:var(--mute)"></div>
+      <div id="ns_filelist" class="stage-list"></div>
     </div>
     <p style="color:var(--mute);font-size:12px;line-height:1.6;margin-bottom:14px">
       Laser parameters and the chemical recipe can be added afterwards from the sample's
@@ -2975,11 +3038,8 @@ function newSampleForm(p){
       <button class="btn btn-out" onclick="closeModal()">Cancel</button>
     </div>
     <div class="errmsg" id="ns_err"></div>`);
-  document.getElementById('ns_files').onchange=e=>{
-    const f=[...e.target.files];
-    document.getElementById('ns_filelist').innerHTML=
-      f.length?`<b>${f.length} file(s):</b> `+f.map(x=>esc(x.name)).join(', '):'';
-  };
+  stageClear('nsFiles');
+  stageInit('nsFiles','ns_files','ns_filelist');
   document.getElementById('ns_label').onkeydown=e=>{
     if(e.key==='Enter'){e.preventDefault();document.getElementById('ns_save').click();} };
   document.getElementById('ns_save').onclick=async()=>{
@@ -2993,7 +3053,7 @@ function newSampleForm(p){
     try{
       const sm={label,material:document.getElementById('ns_material').value.trim(),
                 laser:{},files:[],created:new Date().toISOString()};
-      const files=[...document.getElementById('ns_files').files];
+      const files=staged('nsFiles');
       if(files.length){
         const folder=await ensureSubfolder('Sample_'+label.replace(/[^\w-]+/g,'_'),p.folderId);
         sm.folderId=folder;
