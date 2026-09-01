@@ -786,7 +786,8 @@ async function onConnected(){
     await loadLogos();
     await loadPrintedLog();
     await loadProjects();
-    goProjects();                       // always land on the board when done
+    goProjects();
+    startProjectPolling();                       // always land on the board when done
   }catch(e){
     console.error('[LABCORE] load failed',e);
     document.getElementById('mainView').innerHTML=
@@ -1142,25 +1143,17 @@ async function loadProjects(){
   async function loadOne(folder){
     try{
       const jr=await gapi.client.drive.files.list({
-        q:`'${folder.id}' in parents and name='project.json' and trashed=false`,fields:'files(id)'});
+        q:`'${folder.id}' in parents and name='project.json' and trashed=false`,
+        fields:'files(id,modifiedTime)'});
       if(!jr.result.files.length)return null;      // not a project folder
-      let data=await readJson(jr.result.files[0].id);
+      const jsonId=jr.result.files[0].id;
+      let data=await readJson(jsonId);
       if(typeof data==='string')data=JSON.parse(data);
       if(!data||typeof data!=='object')throw new Error('unreadable project.json');
-      data.name=data.name||folder.name.replace(/^PRJ_/,'').replace(/_/g,' ');
-      data.status=data.status||'active';
-      data.priority=data.priority||'Medium';
-      data.deadline=data.deadline||'';
-      data.description=data.description||'';
-      data.samples=Array.isArray(data.samples)?data.samples:[];
-      data.drawings=Array.isArray(data.drawings)?data.drawings:[];
-      data.people=Array.isArray(data.people)?data.people:[];
-      data.tasks=Array.isArray(data.tasks)?data.tasks.map(t=>{
-        if(typeof t==='string')return {text:t,done:false};
-        if(t.who&&!data.people.some(x=>x.toLowerCase()===t.who.toLowerCase()))data.people.push(t.who);
-        return {text:t.text||'',done:!!t.done};
-      }):[];
-      return {jsonId:jr.result.files[0].id,folderId:folder.id,data};
+      data=normalizeProjectData(data,folder.name);
+      return {jsonId,folderId:folder.id,data,
+              mtime:jr.result.files[0].modifiedTime,
+              base:JSON.parse(JSON.stringify(data))};   // snapshot for 3-way merge
     }catch(e){
       skipped++; console.warn('[LABCORE] could not load',folder.name,e);
       return null;
@@ -1180,6 +1173,100 @@ async function loadProjects(){
   peopleColorMap=null;   // rebuild colour assignments for the new roster
   console.log(`[LABCORE] root=${rootFolderId} folders=${folders.length} projects=${projects.length} skipped=${skipped}`);
   if(skipped)toast(skipped+' project(s) could not be read — see console',true);
+}
+
+/* fill in defaults so projects written by older versions still work */
+function normalizeProjectData(data,folderName){
+  data.name=data.name||(folderName||'').replace(/^PRJ_/,'').replace(/_/g,' ');
+  data.status=data.status||'active';
+  data.priority=data.priority||'Medium';
+  data.deadline=data.deadline||'';
+  data.description=data.description||'';
+  data.samples=Array.isArray(data.samples)?data.samples:[];
+  data.drawings=Array.isArray(data.drawings)?data.drawings:[];
+  data.people=Array.isArray(data.people)?data.people:[];
+  data.tasks=Array.isArray(data.tasks)?data.tasks.map(t=>{
+    if(typeof t==='string')return {text:t,done:false};
+    if(t.who&&!data.people.some(x=>x.toLowerCase()===t.who.toLowerCase()))data.people.push(t.who);
+    return {text:t.text||'',done:!!t.done};
+  }):[];
+  return data;
+}
+
+/* ================= CONCURRENT EDITING =================
+   Several people can have the same project open. Before writing we check
+   whether the file changed on Drive since we loaded it; if it did we do a
+   three-way merge (common ancestor = the copy we started from) so both
+   sets of changes survive instead of one overwriting the other.        */
+const same=(a,b)=>JSON.stringify(a)===JSON.stringify(b);
+const pick=(base,ours,theirs)=>same(ours,base)?theirs:ours;   // we changed it? keep ours
+
+/* merge a list of plain strings (people) */
+function mergeStrings(base,ours,theirs,keyOf){
+  const k=x=>keyOf?keyOf(x):x;
+  const removedByUs=base.filter(b=>!ours.some(o=>k(o)===k(b))).map(k);
+  const addedByUs  =ours.filter(o=>!base.some(b=>k(b)===k(o)));
+  const out=theirs.filter(t=>!removedByUs.includes(k(t)));
+  addedByUs.forEach(a=>{ if(!out.some(o=>k(o)===k(a)))out.push(a); });
+  return out;
+}
+/* merge a list of objects identified by a key, merging items present in both */
+function mergeObjects(base,ours,theirs,keyOf,mergeItem){
+  const find=(arr,key)=>arr.find(x=>keyOf(x)===key);
+  const removedByUs=base.filter(b=>!find(ours,keyOf(b))).map(keyOf);
+  const out=[];
+  theirs.forEach(t=>{
+    const key=keyOf(t);
+    if(removedByUs.includes(key))return;                 // we deleted it
+    const o=find(ours,key), b=find(base,key);
+    out.push(o&&b ? mergeItem(b,o,t) : (o||t));
+  });
+  ours.forEach(o=>{ if(!find(theirs,keyOf(o))&&!find(base,keyOf(o)))out.push(o); });  // we added it
+  return out;
+}
+const unionById=(a,b)=>{
+  const out=[...(a||[])];
+  (b||[]).forEach(x=>{ if(!out.some(y=>y.id===x.id))out.push(x); });
+  return out;
+};
+function mergeTask(b,o,t){
+  return {text:o.text||t.text, done:pick(b.done,o.done,t.done)};
+}
+function mergeSample(b,o,t){
+  return {
+    label:pick(b.label,o.label,t.label),
+    material:pick(b.material,o.material,t.material),
+    created:o.created||t.created,
+    folderId:o.folderId||t.folderId,
+    laser:pick(b.laser,o.laser,t.laser),
+    recipe:pick(b.recipe,o.recipe,t.recipe),
+    chem:pick(b.chem,o.chem,t.chem),
+    files:unionById(t.files,o.files)
+  };
+}
+function mergeProject(base,ours,theirs){
+  const out=JSON.parse(JSON.stringify(theirs));
+  ['name','status','priority','deadline','description'].forEach(k=>{
+    out[k]=pick(base[k],ours[k],theirs[k]);
+  });
+  out.people =mergeStrings(base.people||[],ours.people||[],theirs.people||[],x=>String(x).toLowerCase());
+  out.tasks  =mergeObjects(base.tasks||[],ours.tasks||[],theirs.tasks||[],
+                           t=>String(t.text||'').toLowerCase(),mergeTask);
+  out.samples=mergeObjects(base.samples||[],ours.samples||[],theirs.samples||[],
+                           s=>String(s.label||'').toLowerCase(),mergeSample);
+  out.drawings=unionById(theirs.drawings,ours.drawings);
+  out.excelId  =theirs.excelId||ours.excelId;
+  out.excelLink=theirs.excelLink||ours.excelLink;
+  return out;
+}
+async function remoteMtime(fileId){
+  const r=await gapi.client.drive.files.get({fileId,fields:'modifiedTime'});
+  return r.result.modifiedTime;
+}
+async function fetchProjectData(jsonId){
+  let d=await readJson(jsonId);
+  if(typeof d==='string')d=JSON.parse(d);
+  return normalizeProjectData(d,'');
 }
 
 /* escape text for safe HTML insertion */
@@ -2936,7 +3023,49 @@ async function uploadDrawings(p){
 }
 
 async function saveProject(p){
+  // did somebody else write this project while we had it open?
+  let mt=null;
+  try{ mt=await remoteMtime(p.jsonId); }catch(e){ /* offline check — just save */ }
+  if(mt && p.mtime && mt!==p.mtime){
+    try{
+      const theirs=await fetchProjectData(p.jsonId);
+      const base=p.base||theirs;
+      p.data=mergeProject(base,p.data,theirs);
+      toast('Merged with changes from another user');
+    }catch(e){
+      console.warn('[LABCORE] merge failed, keeping local copy',e);
+    }
+  }
   await writeJson('project.json',p.folderId,p.data,p.jsonId);
+  p.base=JSON.parse(JSON.stringify(p.data));
+  try{ p.mtime=await remoteMtime(p.jsonId); }catch(e){ p.mtime=null; }
+}
+
+/* ---- live refresh: pick up other people's edits while a project is open ---- */
+const PROJ_POLL=15000;
+let pollTimer=null;
+function startProjectPolling(){
+  clearInterval(pollTimer);
+  pollTimer=setInterval(checkProjectFreshness,PROJ_POLL);
+}
+async function checkProjectFreshness(){
+  if(!accessToken)return;
+  const p=projects[selectedProjectIndex];
+  if(!p)return;
+  // never interrupt someone mid-edit or mid-save
+  if(laserEditing||detailsEditing||savingBusy)return;
+  if(document.getElementById('modalBg').classList.contains('open'))return;
+  try{
+    const mt=await remoteMtime(p.jsonId);
+    if(!mt||mt===p.mtime)return;
+    const theirs=await fetchProjectData(p.jsonId);
+    // nothing unsaved locally -> just take their version
+    p.data=same(p.data,p.base)?theirs:mergeProject(p.base||theirs,p.data,theirs);
+    p.base=JSON.parse(JSON.stringify(p.data));
+    p.mtime=mt;
+    renderProject();
+    toast('Project updated by another user');
+  }catch(e){ /* transient network issues are not worth reporting */ }
 }
 
 /* ---------- Samples ---------- */
