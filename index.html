@@ -664,6 +664,15 @@ function showInitError(){
 function hideInitError(){
   const el=document.getElementById('configWarn'); if(el)el.innerHTML='';
 }
+/* Sign-in without re-approving every reload.
+   Nothing is stored on disk: the token lives in memory only, and on load we
+   ask Google for a fresh one silently (prompt:''). Google grants it when the
+   browser still has a Google session and this app was approved before, so
+   there is no prompt. If it can't, the normal Connect screen is shown. */
+let authUserInitiated = false;  // true only when the person clicked Connect
+let refreshTimer = null;
+let signedOut = false;          // set when the user disconnects on purpose
+
 function gisInit(){
   if(typeof google==='undefined'||!google.accounts||!google.accounts.oauth2){
     initError='Google sign-in script did not load. An ad-blocker or the network may be blocking accounts.google.com.';
@@ -672,35 +681,86 @@ function gisInit(){
   tokenClient=google.accounts.oauth2.initTokenClient({
     client_id:CLIENT_ID, scope:SCOPES,
     callback:async(resp)=>{
-      if(resp.error){toast('Auth failed: '+resp.error,true);return;}
+      if(resp.error){
+        // a failed silent attempt just means "ask the user" — not an error,
+        // so only report it when the person actually pressed Connect
+        if(authUserInitiated) toast('Sign-in failed: '+resp.error,true);
+        authUserInitiated=false;
+        showLoginScreen();
+        return;
+      }
+      authUserInitiated=false;
       accessToken=resp.access_token;
       gapi.client.setToken({access_token:accessToken});
-      await onConnected();
+      scheduleTokenRefresh(resp.expires_in);
+      const first = !document.getElementById('mainView').dataset.connected;
+      document.getElementById('mainView').dataset.connected='1';
+      if(first) await onConnected();
     }
   });
   gisReady=true;
 }
+/* keep the session alive: tokens last about an hour, so renew a little early */
+function scheduleTokenRefresh(expiresIn){
+  clearTimeout(refreshTimer);
+  const secs = Math.max(60, (parseInt(expiresIn,10)||3600) - 300);
+  refreshTimer = setTimeout(()=>{
+    if(signedOut) return;
+    try{ tokenClient.requestAccessToken({prompt:''}); }catch(e){}
+  }, secs*1000);
+}
+/* try to restore the session with no prompt at all */
+let silentTried = false;
+function trySilentSignIn(){
+  if(!gisReady || accessToken || signedOut || silentTried) return;
+  silentTried = true;
+  try{ tokenClient.requestAccessToken({prompt:''}); }
+  catch(e){ showLoginScreen(); }
+}
+function showLoginScreen(){
+  const ls=document.getElementById('loginState');
+  if(ls) ls.style.display='';
+}
+
+let booted=false;
 window.onload=()=>{
+  if(booted)return; booted=true;
+  try{ if(sessionStorage.getItem('labcore_signedout')){ signedOut=true;
+       sessionStorage.removeItem('labcore_signedout'); } }catch(e){}
   if(configMissing()){showConfigWarn();return;}
   gapiInit(); gisInit();
   // the two Google scripts sometimes arrive late; retry once
   setTimeout(()=>{ if(!gapiReady&&!initError)gapiInit();
                    if(!gisReady&&!initError)gisInit(); },1500);
+  // once both are ready, restore the previous session silently
+  let waited=0;
+  const t=setInterval(()=>{
+    waited+=200;
+    if(gapiReady&&gisReady){ clearInterval(t); trySilentSignIn(); }
+    else if(waited>6000){ clearInterval(t); }
+  },200);
 };
 
 document.getElementById('homeLink').onclick=()=>{ if(accessToken) goProjects(); };
 document.getElementById('authBtn').onclick=()=>{
   if(configMissing()){showConfigWarn();toast('Set CLIENT_ID and API_KEY first',true);return;}
+  signedOut=false;
   if(!gapiReady||!gisReady){
     if(initError){ showInitError(); toast('Google could not start — see the message above',true); }
     else{ toast('Still connecting to Google — try again in a second',true); }
     return;
   }
   if(accessToken){ // disconnect
+    signedOut=true; clearTimeout(refreshTimer);
     google.accounts.oauth2.revoke(accessToken,()=>{});
-    accessToken=null; location.reload(); return;
+    accessToken=null;
+    try{ sessionStorage.setItem('labcore_signedout','1'); }catch(e){}
+    location.reload(); return;
   }
-  tokenClient.requestAccessToken({prompt:'consent'});
+  // '' lets Google skip the prompt when this app was already approved;
+  // it still shows the consent/account screen the first time or after revoking
+  authUserInitiated=true;
+  tokenClient.requestAccessToken({prompt:''});
 };
 
 async function onConnected(){
