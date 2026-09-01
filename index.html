@@ -438,16 +438,31 @@
   .xlsx-arrow{margin-left:auto;font-size:17px;opacity:.85}
 
   /* sample popup header: name, material, actions */
-  .smp-head{display:flex;justify-content:space-between;align-items:flex-start;gap:14px;
-    flex-wrap:wrap;padding-bottom:14px;margin-bottom:16px;border-bottom:1px solid var(--line)}
+  .smp-head{display:flex;justify-content:space-between;align-items:center;gap:14px;
+    flex-wrap:wrap;padding-bottom:12px;margin-bottom:14px;border-bottom:1px solid var(--line)}
   .smp-name{font-size:20px;font-weight:900;letter-spacing:-.3px;line-height:1.2}
-  .smp-mat{display:flex;align-items:center;gap:8px;margin-top:6px}
+  .smp-mat{display:flex;align-items:center;gap:9px}
   .smp-mat .lbl{font-size:10px;font-weight:800;letter-spacing:1px;text-transform:uppercase;
     color:var(--mute);background:var(--panel2);border:1px solid var(--line);
     padding:3px 8px;border-radius:20px}
   .smp-mat .val{font-size:14px;font-weight:600;color:var(--ink)}
   .smp-mat .val.none{color:var(--mute);font-style:italic;font-weight:400}
   .smp-acts{display:flex;gap:8px;flex-wrap:wrap}
+
+  .data-btns{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:12px}
+  @media(max-width:520px){.data-btns{grid-template-columns:1fr}}
+  .data-btn{display:flex;align-items:center;gap:11px;padding:13px 14px;border-radius:10px;
+    background:#fff;border:1px solid var(--line);color:var(--ink);text-align:left;
+    transition:.14s;box-shadow:var(--shadow)}
+  .data-btn:hover{border-color:var(--acc);color:var(--acc);transform:translateY(-1px);
+    box-shadow:var(--shadow-lg)}
+  .data-ico{display:grid;place-items:center;width:38px;height:38px;flex-shrink:0;
+    border-radius:9px;background:var(--panel2);color:var(--acc)}
+  .data-btn:hover .data-ico{background:#eef3fe}
+  .data-txt{display:flex;flex-direction:column;line-height:1.3;min-width:0}
+  .data-txt b{font-size:14px;font-weight:800}
+  .data-txt small{font-size:11px;color:var(--mute);font-weight:500}
+  .data-btn:hover .data-txt small{color:var(--acc)}
 
   .stage-head{display:flex;justify-content:space-between;align-items:center;
     font-size:11px;font-weight:800;letter-spacing:.4px;text-transform:uppercase;
@@ -2065,12 +2080,31 @@ function renderProject(){
               <span class="xlsx-arrow">↗</span>
             </a>`
           :'<div class="empty-note" style="padding:10px">The parameters sheet appears once the first sample is saved.</div>'}
-        <div style="display:flex;gap:8px;margin:14px 0 8px">
-          <input type="file" id="pj_drawin" multiple style="flex:1">
-          <button class="btn btn-blue" id="pj_drawup" style="white-space:nowrap">Add</button>
+        <div class="data-btns">
+          <button class="data-btn" id="pj_addfiles">
+            <span class="data-ico">
+              <svg viewBox="0 0 24 24" width="21" height="21" fill="none" stroke="currentColor"
+                   stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                <path d="M12 3v13M7 8l5-5 5 5"></path>
+              </svg>
+            </span>
+            <span class="data-txt"><b>Add files</b><small>drawings, photos, reports</small></span>
+          </button>
+          <button class="data-btn" id="pj_openfolder">
+            <span class="data-ico">
+              <svg viewBox="0 0 24 24" width="21" height="21" fill="none" stroke="currentColor"
+                   stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path>
+              </svg>
+            </span>
+            <span class="data-txt"><b>Open folder</b><small>this project in Drive</small></span>
+          </button>
         </div>
+        <input type="file" id="pj_drawin" multiple style="display:none">
         <div id="pj_drawstage" class="stage-list"></div>
-        <div class="gallery" id="pj_drawgal"></div>
+        <div id="pj_uploadrow"></div>
+        <div class="gallery" id="pj_drawgal" style="margin-top:10px"></div>
       </div>
 
       <!-- TASKS -->
@@ -2087,8 +2121,12 @@ function renderProject(){
   document.getElementById('editProjectBtn').onclick=()=>openProjectEdit(p);
   document.getElementById('addSampleBtn').onclick=()=>newSampleForm(p);
   stageClear('pjDraw');
+  stageHooks['pjDraw']=()=>drawUploadRow(p);
   stageInit('pjDraw','pj_drawin','pj_drawstage');
-  document.getElementById('pj_drawup').onclick=()=>uploadDrawings(p);
+  document.getElementById('pj_addfiles').onclick=()=>document.getElementById('pj_drawin').click();
+  document.getElementById('pj_openfolder').onclick=()=>
+    window.open('https://drive.google.com/drive/folders/'+p.folderId,'_blank');
+  drawUploadRow(p);
   document.getElementById('pj_sync').onclick=()=>autoSync(p,true);
   renderProjectTasks(p);
   renderDrawings(p);
@@ -2145,6 +2183,7 @@ function setSyncState(kind,text){
    pick files in several goes and remove any you chose by mistake before
    anything is sent to Drive.                                            */
 const fileStage = {};
+const stageHooks = {};      // key -> callback fired whenever the list changes
 function stageInit(key, inputId, listId){
   fileStage[key] = fileStage[key] || [];
   const inp = document.getElementById(inputId);
@@ -2157,11 +2196,12 @@ function stageInit(key, inputId, listId){
     });
     e.target.value = '';            // lets you re-pick the same file later
     stageRender(key, listId);
-    if(typeof updateNewSummary==='function') updateNewSummary();
   };
   stageRender(key, listId);
 }
 function stageRender(key, listId){
+  if(stageHooks[key]) setTimeout(stageHooks[key],0);
+  if(typeof updateNewSummary==='function') updateNewSummary();
   const el = document.getElementById(listId); if(!el) return;
   const arr = fileStage[key] || [];
   if(!arr.length){ el.innerHTML=''; return; }
@@ -2357,6 +2397,15 @@ function renderDrawings(p){
     g.appendChild(d);
   });
 }
+function drawUploadRow(p){
+  const row=document.getElementById('pj_uploadrow'); if(!row)return;
+  const n=staged('pjDraw').length;
+  row.innerHTML = n
+    ? `<button class="btn btn-acc" id="pj_drawup" style="width:100%;margin-top:8px">
+         ⬆ Upload ${n} file${n===1?'':'s'} to Drive</button>`
+    : '';
+  if(n)document.getElementById('pj_drawup').onclick=()=>uploadDrawings(p);
+}
 async function uploadDrawings(p){
   const files=staged('pjDraw');
   if(!files.length){toast('Choose file(s) first',true);return;}
@@ -2369,8 +2418,8 @@ async function uploadDrawings(p){
       p.data.drawings.push({id:r.id,name:r.name,link:r.webViewLink,thumb:r.thumbnailLink});
     }
     await saveProject(p);renderDrawings(p);
-    stageClear('pjDraw'); stageRender('pjDraw','pj_drawstage');
-    toast('Drawings added');
+    stageClear('pjDraw'); stageRender('pjDraw','pj_drawstage'); drawUploadRow(p);
+    toast('Files added');
   }catch(e){toast('Error: '+e.message,true);}
   btn.textContent='Add';
 }
@@ -2944,12 +2993,10 @@ function sampleHeadHtml(sm,si){
       </div>
     </div>`;
   }
+  // the name already sits in the popup's title bar, so only the material repeats here
   return `<div class="smp-head">
-    <div>
-      <div class="smp-name">${esc(sm.label)}</div>
-      <div class="smp-mat"><span class="lbl">Material</span>
-        <span class="val${sm.material?'':' none'}">${sm.material?esc(sm.material):'not specified'}</span></div>
-    </div>
+    <div class="smp-mat"><span class="lbl">Material</span>
+      <span class="val${sm.material?'':' none'}">${sm.material?esc(sm.material):'not specified'}</span></div>
     <div class="smp-acts">
       <button class="btn btn-acc" style="padding:9px 16px;font-size:13px"
         onclick="startDetailsEdit(projects[selectedProjectIndex],${si})">✎ Edit sample</button>
