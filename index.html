@@ -473,6 +473,27 @@
   .data-txt small{font-size:11px;color:var(--mute);font-weight:500}
   .data-btn:hover .data-txt small{color:var(--acc)}
 
+  .prn-chip{display:none;align-items:center;gap:7px;padding:7px 13px;border-radius:20px;
+    border:1px solid var(--line);background:#fff;font-size:12px;font-weight:700;
+    color:var(--mute);transition:.12s;white-space:nowrap}
+  .prn-chip:hover{border-color:var(--acc);color:var(--acc)}
+  .prn-chip.on{border-color:#a7f3c4;background:#f0fdf4;color:#046c4e}
+  .prn-dot{width:7px;height:7px;border-radius:50%;background:#c4c9d2;flex-shrink:0}
+  .prn-chip.on .prn-dot{background:#12b76a}
+
+  .tbtn.sm{padding:5px 11px;font-size:12px}
+  .optrow{display:flex;align-items:center;gap:6px;margin-top:7px;flex-wrap:wrap}
+  .optlbl{font-size:10px;font-weight:800;letter-spacing:.8px;text-transform:uppercase;color:var(--mute)}
+  input[type=range]{width:100%;accent-color:var(--acc);padding:0}
+
+  .logrow{display:flex;align-items:center;gap:9px;padding:8px 11px;border:1px solid var(--line);
+    border-radius:7px;margin-bottom:5px;font-size:13px;flex-wrap:wrap}
+  .logdot{width:8px;height:8px;border-radius:50%;flex-shrink:0}
+  .logdot.ok{background:#12b76a} .logdot.bad{background:var(--warn)}
+  .logwhat{flex:1;min-width:0}
+  .logtime{font-size:11px;color:var(--mute);font-family:'Space Mono',monospace}
+  .logerr{width:100%;font-size:11px;color:var(--warn);margin-top:3px}
+
   .modalbusy{display:none;align-items:center;gap:7px;font-size:12px;font-weight:700;
     color:var(--acc);white-space:nowrap}
   .modalbusy.on{display:inline-flex}
@@ -522,6 +543,7 @@
     </div>
   </div>
   <div class="userbox">
+    <button id="printerChip" class="prn-chip" style="display:none" title="Printer settings"></button>
     <span id="userEmail" class="mono" style="color:var(--mute)"></span>
     <button id="authBtn" class="pill go">Connect Google Drive</button>
   </div>
@@ -686,6 +708,8 @@ async function onConnected(){
   document.getElementById('authBtn').className='pill ghost';
   document.getElementById('newProjectBtn').style.display='block';
   renderNav();
+  renderPrinterChip();
+  if(printerIP&&canPrint())tryPrinter();
   const ls=document.getElementById('loginState'); if(ls)ls.style.display='none';
   // show a loading board straight away so the screen is never left stale
   activeNav='projects';
@@ -1324,6 +1348,142 @@ async function sendSegs(segs){
   return true;
 }
 
+/* ---- text metrics, matching the standalone printer page ---- */
+function sizeScale(sz){ return ({24:1,25:2})[Number(sz)] || 1; }
+function charsForScale(scale){ return Math.max(8, Math.floor(CW/Math.max(1,scale))); }
+function cpad(str,W){ const pad=Math.max(0,Math.floor((W-str.length)/2)); return ' '.repeat(pad)+str; }
+
+/* ---- logo bitmap helpers ---- */
+function unpackLogoToCanvas(l){
+  const bpr=Math.ceil(l.w/8);
+  const c=document.createElement('canvas'); c.width=l.w; c.height=l.h;
+  const ctx=c.getContext('2d');
+  const id=ctx.createImageData(l.w,l.h);
+  for(let y=0;y<l.h;y++)for(let x=0;x<l.w;x++){
+    const bit=(l.packed[y*bpr+(x>>3)]>>(7-(x&7)))&1;
+    const i=(y*l.w+x)*4, v=bit?0:255;
+    id.data[i]=id.data[i+1]=id.data[i+2]=v; id.data[i+3]=255;
+  }
+  ctx.putImageData(id,0,0); return c;
+}
+function logoBounds(l){
+  const bpr=Math.ceil(l.w/8);
+  let x0=l.w,y0=l.h,x1=-1,y1=-1;
+  for(let y=0;y<l.h;y++)for(let x=0;x<l.w;x++){
+    if((l.packed[y*bpr+(x>>3)]>>(7-(x&7)))&1){
+      if(x<x0)x0=x; if(x>x1)x1=x; if(y<y0)y0=y; if(y>y1)y1=y;
+    }
+  }
+  if(x1<0)return {x:0,y:0,w:l.w,h:l.h,empty:true};
+  return {x:x0,y:y0,w:x1-x0+1,h:y1-y0+1,empty:false};
+}
+/* scale a stored logo to a percentage, exactly as the printer page did */
+function makeScaledLogo(l,scale){
+  const pct=Math.max(10,Math.min(200,parseInt(scale,10)||100));
+  const src=unpackLogoToCanvas(l), b=logoBounds(l);
+  let dw=Math.max(1,Math.round(b.w*pct/100));
+  let dh=Math.max(1,Math.round(b.h*pct/100));
+  if(dw>PW){ const fit=PW/dw; dw=PW; dh=Math.max(1,Math.round(dh*fit)); }
+  const outBpr=Math.ceil(dw/8);
+  const c=document.createElement('canvas'); c.width=dw; c.height=dh;
+  const ctx=c.getContext('2d');
+  ctx.imageSmoothingEnabled=false;
+  ctx.fillStyle='#fff'; ctx.fillRect(0,0,dw,dh);
+  if(!b.empty)ctx.drawImage(src,b.x,b.y,b.w,b.h,0,0,dw,dh);
+  const id=ctx.getImageData(0,0,dw,dh);
+  const packed=new Uint8Array(dh*outBpr);
+  for(let py=0;py<dh;py++)for(let px=0;px<dw;px++){
+    const i=(py*dw+px)*4;
+    const lum=0.299*id.data[i]+0.587*id.data[i+1]+0.114*id.data[i+2];
+    if(lum<220)packed[py*outBpr+(px>>3)]|=(0x80>>(px%8));   // keeps scaled art dark
+  }
+  return {type:'logo',packed,width:dw,height:dh};
+}
+/* render text to a bitmap — used for inverted (white-on-black) titles */
+function renderTextBitmap(lines,sz){
+  const SUP=2, lh=Math.round(sz*1.30)+2, H=lines.length*lh+4;
+  const c=document.createElement('canvas'); c.width=PW*SUP; c.height=H*SUP;
+  const ctx=c.getContext('2d'); ctx.scale(SUP,SUP);
+  ctx.fillStyle='#000'; ctx.fillRect(0,0,PW,H);
+  ctx.fillStyle='#fff';
+  ctx.font=`bold ${sz}px "DejaVu Sans Mono", monospace`;
+  ctx.textBaseline='middle'; ctx.textAlign='center';
+  lines.forEach((t,i)=>ctx.fillText(t,PW/2,2+i*lh+lh/2));
+  const small=document.createElement('canvas'); small.width=PW; small.height=H;
+  small.getContext('2d').drawImage(c,0,0,PW,H);
+  const id=small.getContext('2d').getImageData(0,0,PW,H);
+  const bpr=Math.ceil(PW/8), packed=new Uint8Array(H*bpr);
+  for(let y=0;y<H;y++)for(let x=0;x<PW;x++){
+    const i=(y*PW+x)*4;
+    const lum=0.299*id.data[i]+0.587*id.data[i+1]+0.114*id.data[i+2];
+    if(lum<128)packed[y*bpr+(x>>3)]|=(0x80>>(x%8));
+  }
+  return {type:'logo',packed,width:PW,height:H};
+}
+
+/* ---- MESSAGE: the same layout the standalone page produced ---- */
+function buildMessageSegs(p){
+  const segs=[];
+  const bodyScale=sizeScale(p.sz||24), titleScale=sizeScale(p.titleSz||p.sz||24);
+  const W=charsForScale(bodyScale), DASH='-'.repeat(CW);
+  const clean=v=>ltAsc(String(v||''));
+
+  if(p.logoKey){
+    const lg=findLogo(p.logoKey);
+    if(lg&&lg.packed)segs.push(makeScaledLogo(lg,p.logoScale||100));
+  }
+  // date + rule in one segment, so the printer keeps them together
+  segs.push({lines:[cpad(clean(p.date||nowStamp()),CW),'',DASH],
+             opts:{bold:false,center:false,size:1}});
+
+  if(p.title){
+    const wrapped=txtWrap(clean(p.title),charsForScale(titleScale));
+    if(p.inv){
+      segs.push(renderTextBitmap(wrapped,24*titleScale));
+      segs.push({lines:['',DASH],opts:{bold:false,center:false,size:1}});
+    }else{
+      segs.push({lines:wrapped,opts:{bold:true,center:!!p.centerTitle,size:titleScale}});
+      segs.push({lines:[DASH],opts:{bold:false,center:false,size:1}});
+    }
+  }
+  if(p.body){
+    const lines=[];
+    p.body.split('\n').forEach(para=>{
+      if(!para){lines.push('');return;}
+      txtWrap(clean(para),W).forEach(l=>lines.push(l));
+    });
+    segs.push({lines,opts:{bold:!!p.bold,center:!!p.centerBody,size:bodyScale}});
+  }
+  if(p.footer){
+    segs.push({lines:[DASH],opts:{bold:false,center:false,size:1}});
+    segs.push({lines:[cpad(clean(p.footer),CW)],opts:{bold:false,center:false,size:1}});
+  }
+  return segs;
+}
+
+/* ---- print job log ---- */
+let printLog=[];
+function logPrint(what,ok,err){
+  printLog.unshift({t:new Date().toISOString(),what,ok,err:err||''});
+  printLog=printLog.slice(0,60);
+  const el=document.getElementById('prn_log'); if(el)renderPrintLog();
+}
+function renderPrintLog(){
+  const el=document.getElementById('prn_log'); if(!el)return;
+  if(!printLog.length){el.innerHTML='<div class="empty-note" style="padding:12px">Nothing printed yet in this session.</div>';return;}
+  el.innerHTML=printLog.map(e=>`<div class="logrow">
+      <span class="logdot ${e.ok?'ok':'bad'}"></span>
+      <span class="logwhat">${esc(e.what)}</span>
+      <span class="logtime">${new Date(e.t).toLocaleTimeString()}</span>
+      ${e.err?`<div class="logerr">${esc(e.err)}</div>`:''}
+    </div>`).join('');
+}
+/* every print goes through here so the log and errors are consistent */
+async function runPrint(what,fn){
+  try{ await fn(); logPrint(what,true); toast('Printed: '+what); return true; }
+  catch(e){ logPrint(what,false,e.message||String(e)); toast('Print failed: '+(e.message||e),true); return false; }
+}
+
 /* Build the exact recipe printout the standalone page produced */
 function buildRecipeSegs(rec,sampleLabel,big){
   const scale=big?2:1;
@@ -1475,112 +1635,294 @@ async function writePrintedXlsx(){
 }
 
 /* ---------- PRINTER PAGE (connection + direct printing) ---------- */
+let prnTab='msg';
+let todoItems=[];
 function renderPrinter(){
-  const blocked=!canPrint();
+  if(!canPrint()){
+    document.getElementById('mainView').innerHTML=`
+      <div class="tilebar"><h2>Thermal printer</h2></div>
+      <div class="config-warn" style="max-width:820px">
+        <b>Not available from this address.</b><br><br>
+        ${esc(printBlockedMsg())}
+      </div>
+      <div class="panelbox" style="max-width:820px;margin-top:16px">
+        <div class="panel-head"><h3><span class="tag laser">LOGOS</span> Shared logo library</h3>
+          <input type="file" id="lg_file" accept="image/*" style="width:auto;font-size:12px"></div>
+        <div id="lg_grid" class="lgrid"></div>
+      </div>`;
+    renderLogoGrid(); wireLogoUpload();
+    return;
+  }
+  const tabs=[['msg','Message'],['raw','Raw text'],['todo','To-do'],
+              ['logo','Logos'],['paper','Paper'],['log','Log']];
   document.getElementById('mainView').innerHTML=`
     <div class="tilebar"><h2>Thermal printer</h2>
-      <span id="prn_state" class="syncstate"></span></div>
+      <span style="display:flex;align-items:center;gap:10px">
+        <span id="prn_state" class="syncstate"></span>
+      </span>
+    </div>
+    <div class="modetog" style="margin:0 0 16px;flex-wrap:wrap">
+      ${tabs.map(([id,label])=>`<button class="tbtn${prnTab===id?' on':''}" onclick="prnTab='${id}';renderPrinter()">${label}</button>`).join('')}
+    </div>
+    <div id="prnBody"></div>`;
+  document.getElementById('prnBody').innerHTML=prnTabHtml();
+  wirePrnTab();
+  setPrnState(printerOnline?'ok':'err',printerOnline?'Online · '+printerIP:'Not connected');
+  if(printerIP&&!printerOnline)tryPrinter();
+}
 
-    ${blocked?`<div class="config-warn" style="max-width:820px">
-      <b>View-only on this address.</b> ${esc(printBlockedMsg())}
-    </div>`:''}
-
+function prnTabHtml(){
+  const logoOpts=`<option value="">— none —</option>`+
+    labLogos.map(l=>`<option value="${esc(l.key)}">${esc(l.name)}</option>`).join('');
+  if(prnTab==='msg')return `
     <div class="pgrid">
       <div class="panelbox">
-        <div class="panel-head"><h3><span class="tag chem">CONNECTION</span> Printer address</h3></div>
-        <div class="field"><label>Printer IP on the lab network</label>
-          <input id="prn_ip" placeholder="192.168.1.50" value="${esc(printerIP)}" ${blocked?'disabled':''}></div>
-        <div style="display:flex;gap:9px">
-          <button class="btn btn-acc" id="prn_connect" ${blocked?'disabled':''}>Connect</button>
-          <button class="btn btn-out" id="prn_feed" ${blocked?'disabled':''}>Feed paper</button>
+        <div class="panel-head"><h3><span class="tag file">MESSAGE</span> Compose</h3></div>
+        <div class="field"><label>Date <span style="text-transform:none;letter-spacing:0;font-weight:400">(blank = today)</span></label>
+          <input id="m_date" value="${esc(nowStamp())}"></div>
+        <div class="field"><label>Title</label>
+          <input id="m_title" placeholder="Heading on the printout">
+          <div class="optrow">
+            <span class="optlbl">Size</span>
+            <button class="tbtn sm on" id="m_tS" onclick="setMsgSize('title',24)">S</button>
+            <button class="tbtn sm" id="m_tL" onclick="setMsgSize('title',25)">L</button>
+            <button class="tbtn sm" id="m_inv" onclick="this.classList.toggle('on')">Invert</button>
+            <button class="tbtn sm" id="m_ct" onclick="this.classList.toggle('on')">Center</button>
+          </div>
         </div>
-        <p style="color:var(--mute);font-size:12px;margin-top:14px;line-height:1.6">
-          Saved on this computer only, so each machine keeps its own printer setting.
-        </p>
-      </div>
-
-      <div class="panelbox span2">
-        <div class="panel-head"><h3><span class="tag laser">LOGOS</span> Printed at the top of a recipe</h3>
-          <span style="display:flex;gap:9px;align-items:center">
-            <input type="file" id="lg_file" accept="image/*" style="width:auto;font-size:12px">
-          </span>
+        <div class="field"><label>Body</label>
+          <textarea id="m_body" rows="6" placeholder="Message text"></textarea>
+          <div class="optrow">
+            <span class="optlbl">Size</span>
+            <button class="tbtn sm on" id="m_bS" onclick="setMsgSize('body',24)">S</button>
+            <button class="tbtn sm" id="m_bL" onclick="setMsgSize('body',25)">L</button>
+            <button class="tbtn sm" id="m_bold" onclick="this.classList.toggle('on')">Bold</button>
+            <button class="tbtn sm" id="m_cb" onclick="this.classList.toggle('on')">Center</button>
+          </div>
         </div>
-        <div id="lg_grid" class="lgrid"></div>
-        <p style="color:var(--mute);font-size:12px;margin-top:12px;line-height:1.6">
-          Images are converted to 1-bit bitmaps for the thermal printer and stored in the shared
-          Drive folder, so everyone sees the same logo list. Choose one per recipe in the editor.
-        </p>
+        <div class="field"><label>Footer (optional)</label><input id="m_footer"></div>
       </div>
-
       <div class="panelbox">
-        <div class="panel-head"><h3><span class="tag file">QUICK PRINT</span> Free text</h3></div>
-        <div class="field"><label>Text</label>
-          <textarea id="prn_raw" rows="5" placeholder="Anything you want on a label…" ${blocked?'disabled':''}></textarea></div>
-        <div style="display:flex;gap:9px;align-items:center;flex-wrap:wrap">
-          <label style="text-transform:none;letter-spacing:0;margin:0;display:flex;align-items:center;gap:7px;font-size:13px;color:var(--ink)">
-            <input type="checkbox" id="prn_big" style="width:auto" ${blocked?'disabled':''}> Large text</label>
-          <button class="btn btn-acc" id="prn_send" ${blocked?'disabled':''}>Print</button>
-        </div>
-      </div>
-
-      <div class="panelbox">
-        <div class="panel-head"><h3><span class="tag chem">ARCHIVE</span> Master print log</h3></div>
-        <p style="color:var(--mute);font-size:13px;line-height:1.6;margin-bottom:12px">
-          Every recipe printed from LabCore is copied into one workbook,
-          <code>printed_recipes.xlsx</code>, in the shared <code>LABCORE_DATA</code> folder —
-          a complete history across all projects and samples.
-        </p>
-        <div class="row"><span class="k">Recipes printed so far</span><span class="v">${printedLog.length}</span></div>
-        <div class="row"><span class="k">Most recent</span><span class="v">${printedLog.length?esc(fmtStamp(printedLog[printedLog.length-1].printedAt)):'—'}</span></div>
-        <button class="btn btn-out" id="prn_openlog" style="margin-top:14px;width:100%">📊 Open printed_recipes.xlsx</button>
+        <div class="panel-head"><h3><span class="tag laser">LOGO</span> Optional header image</h3></div>
+        <div class="field"><label>Logo</label><select id="m_logo">${logoOpts}</select></div>
+        <div class="field"><label>Scale <span id="m_scalepct" style="text-transform:none;letter-spacing:0">100%</span></label>
+          <input type="range" id="m_scale" min="10" max="200" value="100"
+            oninput="document.getElementById('m_scalepct').textContent=this.value+'%'"></div>
+        <button class="btn btn-acc" id="m_print" style="width:100%;margin-top:6px">⎙ Print message</button>
+        <p style="color:var(--mute);font-size:12px;line-height:1.6;margin-top:12px">
+          Text is transliterated before printing (ą→a, š→s …) and wrapped to the
+          58&nbsp;mm paper width — 32 characters at size S, 16 at size L.</p>
       </div>
     </div>`;
-  renderLogoGrid();
-  document.getElementById('lg_file').onchange=async(e)=>{
-    const f=e.target.files[0]; if(!f)return;
-    try{
-      const lg=await imageToLogo(f);
-      labLogos.push(lg); await saveLogos();
-      renderLogoGrid(); toast('Logo saved');
-    }catch(err){ toast('Logo failed: '+err.message,true); }
+
+  if(prnTab==='raw')return `
+    <div class="panelbox" style="max-width:760px">
+      <div class="panel-head"><h3><span class="tag file">RAW TEXT</span> Print as typed</h3></div>
+      <div class="field"><label>Text</label><textarea id="r_body" rows="9"></textarea></div>
+      <div class="field"><label>Font size</label>
+        <div class="modetog" style="margin:0">
+          <button class="tbtn on" id="r_S" onclick="setMsgSize('raw',24)">S · 32 chars</button>
+          <button class="tbtn" id="r_L" onclick="setMsgSize('raw',25)">L · 16 chars</button>
+        </div></div>
+      <button class="btn btn-acc" id="r_print" style="width:200px">⎙ Print</button>
+    </div>`;
+
+  if(prnTab==='todo')return `
+    <div class="panelbox" style="max-width:760px">
+      <div class="panel-head"><h3><span class="tag file">TO-DO</span> ${todoItems.length} item(s)</h3>
+        <span style="display:flex;gap:7px">
+          <button class="btn btn-out" style="padding:6px 12px;font-size:12px" onclick="tdAll(true)">Check all</button>
+          <button class="btn btn-out" style="padding:6px 12px;font-size:12px" onclick="tdAll(false)">Uncheck all</button>
+          <button class="btn btn-out" style="padding:6px 12px;font-size:12px" onclick="tdClearDone()">Clear done</button>
+        </span></div>
+      <div style="display:flex;gap:8px;margin-bottom:12px">
+        <input id="td_in" placeholder="New item…" style="flex:1"
+          onkeydown="if(event.key==='Enter'){event.preventDefault();addTodo()}">
+        <button class="btn btn-out" onclick="addTodo()" style="padding:11px 16px">+</button>
+      </div>
+      <div id="td_list" class="tasklist"></div>
+      <div class="field" style="margin-top:14px"><label>Font size</label>
+        <div class="modetog" style="margin:0">
+          <button class="tbtn on" id="t_S" onclick="setMsgSize('todo',24)">S</button>
+          <button class="tbtn" id="t_L" onclick="setMsgSize('todo',25)">L</button>
+        </div></div>
+      <div style="display:flex;gap:9px;margin-top:14px;flex-wrap:wrap">
+        <button class="btn btn-acc" style="flex:1" onclick="printTodo(false)">⎙ Print all</button>
+        <button class="btn btn-out" style="flex:1" onclick="printTodo(true)">⎙ Print pending only</button>
+      </div>
+    </div>`;
+
+  if(prnTab==='logo')return `
+    <div class="panelbox">
+      <div class="panel-head"><h3><span class="tag laser">LOGOS</span> Shared library</h3>
+        <input type="file" id="lg_file" accept="image/*" style="width:auto;font-size:12px"></div>
+      <div id="lg_grid" class="lgrid"></div>
+      <div style="margin-top:16px;padding-top:16px;border-top:1px solid var(--line)">
+        <div class="two">
+          <div class="field"><label>Print a logo</label><select id="lg_sel">${logoOpts}</select></div>
+          <div class="field"><label>Scale <span id="lg_pct" style="text-transform:none;letter-spacing:0">100%</span></label>
+            <input type="range" id="lg_scale" min="10" max="200" value="100"
+              oninput="document.getElementById('lg_pct').textContent=this.value+'%'"></div>
+        </div>
+        <button class="btn btn-acc" id="lg_print" style="width:220px">⎙ Print selected logo</button>
+      </div>
+      <p style="color:var(--mute);font-size:12px;margin-top:14px;line-height:1.6">
+        Images are converted to 1-bit bitmaps and stored in the shared Drive folder,
+        so everyone sees the same list.</p>
+    </div>`;
+
+  if(prnTab==='paper')return `
+    <div class="pgrid">
+      <div class="panelbox">
+        <div class="panel-head"><h3><span class="tag file">PAPER</span> Feed &amp; separators</h3></div>
+        <div style="display:flex;gap:9px;flex-wrap:wrap">
+          <button class="btn btn-out" onclick="printDivider()">— Print divider</button>
+          <button class="btn btn-out" onclick="printFeed()">↓ Feed paper</button>
+        </div>
+      </div>
+      <div class="panelbox">
+        <div class="panel-head"><h3><span class="tag chem">CONNECTION</span> Printer address</h3></div>
+        <div class="field"><label>IP on the lab network</label>
+          <input id="prn_ip" placeholder="192.168.1.50" value="${esc(printerIP)}"></div>
+        <div style="display:flex;gap:9px">
+          <button class="btn btn-acc" id="prn_connect">Connect</button>
+          <button class="btn btn-out" id="prn_forget">Forget</button>
+        </div>
+        <p style="color:var(--mute);font-size:12px;margin-top:12px;line-height:1.6">
+          Stored on this computer only, so every machine keeps its own printer.</p>
+      </div>
+    </div>`;
+
+  return `<div class="panelbox" style="max-width:760px">
+      <div class="panel-head"><h3><span class="tag file">LOG</span> This session</h3>
+        <button class="btn btn-out" style="padding:6px 12px;font-size:12px"
+          onclick="printLog=[];renderPrintLog()">Clear</button></div>
+      <div id="prn_log"></div>
+    </div>`;
+}
+
+let msgSizes={title:24,body:24,raw:24,todo:24};
+function setMsgSize(which,sz){
+  msgSizes[which]=sz;
+  const pairs={title:['m_tS','m_tL'],body:['m_bS','m_bL'],raw:['r_S','r_L'],todo:['t_S','t_L']};
+  const [a,b]=pairs[which]||[];
+  const ea=document.getElementById(a), eb=document.getElementById(b);
+  if(ea)ea.classList.toggle('on',sz===24);
+  if(eb)eb.classList.toggle('on',sz===25);
+}
+function on(id){const e=document.getElementById(id);return !!(e&&e.classList.contains('on'));}
+
+function wireLogoUpload(){
+  const f=document.getElementById('lg_file'); if(!f)return;
+  f.onchange=async(e)=>{
+    const file=e.target.files[0]; if(!file)return;
+    try{ const lg=await imageToLogo(file); labLogos.push(lg); await saveLogos();
+         renderLogoGrid(); toast('Logo saved'); }
+    catch(err){ toast('Logo failed: '+err.message,true); }
     e.target.value='';
   };
-  document.getElementById('prn_openlog').onclick=async()=>{
-    try{
-      let id=printedXlsxId||await findFile('printed_recipes.xlsx',rootFolderId);
-      if(!id){ const r=await writePrintedXlsx(); id=r.id; }
-      window.open('https://drive.google.com/file/d/'+id+'/view','_blank');
-    }catch(e){ toast('Could not open the log: '+e.message,true); }
-  };
-  if(blocked){setPrnState('err','View-only (https)');return;}
-  const ipEl=document.getElementById('prn_ip');
-  document.getElementById('prn_connect').onclick=async()=>{
-    const ip=ipEl.value.trim(); if(!ip){toast('Enter the printer IP',true);return;}
-    setPrnState('busy','Connecting…');
-    try{
-      await printerCheck(ip);
-      printerIP=ip; localStorage.setItem('labcore_pip',ip); printerOnline=true;
-      setPrnState('ok','Online'); toast('Printer connected');
-    }catch(e){ printerOnline=false; setPrnState('err','Cannot reach printer'); }
-  };
-  document.getElementById('prn_feed').onclick=async()=>{
-    try{ printerIP=ipEl.value.trim()||printerIP;
-         await printerPost('/print',{type:'feed'}); toast('Paper fed'); }
-    catch(e){ toast(e.message,true); }
-  };
-  document.getElementById('prn_send').onclick=async()=>{
-    const body=document.getElementById('prn_raw').value.trim();
-    if(!body){toast('Nothing to print',true);return;}
-    const big=document.getElementById('prn_big').checked;
-    try{
-      printerIP=ipEl.value.trim()||printerIP;
-      await sendSegs([{lines:txtWrap(ltAsc(body),big?16:CW),
-                       opts:{bold:false,center:false,size:big?2:1}}]);
-      toast('Printed');
-    }catch(e){ toast(e.message,true); }
-  };
-  if(printerIP)document.getElementById('prn_connect').click();
 }
+function wirePrnTab(){
+  wireLogoUpload(); renderLogoGrid(); renderTodo(); renderPrintLog();
+  const mp=document.getElementById('m_print');
+  if(mp)mp.onclick=()=>printMessage();
+  const rp=document.getElementById('r_print');
+  if(rp)rp.onclick=()=>printRawText();
+  const lp=document.getElementById('lg_print');
+  if(lp)lp.onclick=()=>printSelectedLogo();
+  const c=document.getElementById('prn_connect');
+  if(c)c.onclick=async()=>{
+    const ip=document.getElementById('prn_ip').value.trim();
+    if(!ip){toast('Enter the printer IP',true);return;}
+    printerIP=ip; localStorage.setItem('labcore_pip',ip);
+    await tryPrinter();
+  };
+  const fg=document.getElementById('prn_forget');
+  if(fg)fg.onclick=()=>{ printerIP=''; printerOnline=false;
+    localStorage.removeItem('labcore_pip'); renderPrinter(); renderPrinterChip(); };
+}
+async function tryPrinter(){
+  setPrnState('busy','Connecting…');
+  try{ await printerCheck(); printerOnline=true; setPrnState('ok','Online · '+printerIP); }
+  catch(e){ printerOnline=false; setPrnState('err','Cannot reach '+printerIP); }
+  renderPrinterChip();
+}
+
+/* ---- the print actions ---- */
+function printMessage(){
+  const p={date:document.getElementById('m_date').value.trim(),
+    title:document.getElementById('m_title').value.trim(),
+    body:document.getElementById('m_body').value,
+    footer:document.getElementById('m_footer').value.trim(),
+    bold:on('m_bold'), centerTitle:on('m_ct'), centerBody:on('m_cb'), inv:on('m_inv'),
+    sz:msgSizes.body, titleSz:msgSizes.title,
+    logoKey:document.getElementById('m_logo').value||null,
+    logoScale:document.getElementById('m_scale').value};
+  if(!p.title&&!p.body.trim()){toast('Nothing to print',true);return;}
+  return runPrint('Message'+(p.title?' · '+p.title:''),()=>sendSegs(buildMessageSegs(p)));
+}
+function printRawText(){
+  const body=document.getElementById('r_body').value;
+  if(!body.trim()){toast('Nothing to print',true);return;}
+  const scale=sizeScale(msgSizes.raw), W=charsForScale(scale);
+  const lines=[];
+  body.split('\n').forEach(para=>{
+    if(!para){lines.push('');return;}
+    txtWrap(ltAsc(para),W).forEach(l=>lines.push(l));
+  });
+  return runPrint('Raw text',()=>sendSegs([{lines,opts:{bold:false,center:false,size:scale}}]));
+}
+function printSelectedLogo(){
+  const key=document.getElementById('lg_sel').value;
+  const lg=findLogo(key);
+  if(!lg){toast('Choose a logo first',true);return;}
+  const pct=document.getElementById('lg_scale').value;
+  return runPrint('Logo · '+lg.name,()=>sendSegs([makeScaledLogo(lg,pct)]));
+}
+function printDivider(){
+  return runPrint('Divider',()=>printerPost('/print',{type:'divider'}));
+}
+function printFeed(){
+  return runPrint('Paper feed',()=>printerPost('/print',{type:'feed'}));
+}
+
+/* ---- to-do list ---- */
+function addTodo(){
+  const i=document.getElementById('td_in'); const v=(i.value||'').trim(); if(!v)return;
+  todoItems.push({text:v,done:false}); i.value=''; i.focus(); renderTodo();
+}
+function tdAll(state){ todoItems.forEach(t=>t.done=state); renderTodo(); }
+function tdClearDone(){ todoItems=todoItems.filter(t=>!t.done); renderTodo(); }
+function renderTodo(){
+  const el=document.getElementById('td_list'); if(!el)return;
+  if(!todoItems.length){el.innerHTML='<div class="empty-note" style="padding:12px">No items yet.</div>';return;}
+  el.innerHTML='';
+  todoItems.forEach((t,i)=>{
+    const row=document.createElement('div'); row.className='taskrow';
+    row.innerHTML=`<label style="display:flex;align-items:center;gap:9px;margin:0;cursor:pointer;
+        text-transform:none;letter-spacing:0;color:var(--ink);font-size:14px;flex:1">
+        <input type="checkbox" ${t.done?'checked':''} style="width:auto">
+        <span style="${t.done?'text-decoration:line-through;color:var(--mute)':''}">${esc(t.text)}</span></label>
+      <button class="taskdel">✕</button>`;
+    row.querySelector('input').onchange=e=>{t.done=e.target.checked;renderTodo();};
+    row.querySelector('.taskdel').onclick=()=>{todoItems.splice(i,1);renderTodo();};
+    el.appendChild(row);
+  });
+  const h=document.querySelector('#prnBody .panel-head h3');
+  if(h&&prnTab==='todo')h.innerHTML=`<span class="tag file">TO-DO</span> ${todoItems.length} item(s)`;
+}
+function printTodo(pendingOnly){
+  const items=pendingOnly?todoItems.filter(t=>!t.done):todoItems;
+  if(!items.length){toast('Nothing to print',true);return;}
+  const scale=sizeScale(msgSizes.todo), W=charsForScale(scale)-4;
+  const lines=['TO-DO'+(pendingOnly?' (pending)':''),'-'.repeat(CW)];
+  items.forEach(t=>{
+    const box=t.done?'[x] ':'[ ] ';
+    txtWrap(ltAsc(t.text),W).forEach((chunk,i)=>lines.push((i===0?box:'    ')+chunk));
+  });
+  return runPrint('To-do list',()=>sendSegs([{lines,opts:{bold:false,center:false,size:scale}}]));
+}
+
 function renderLogoGrid(){
   const g=document.getElementById('lg_grid'); if(!g)return;
   if(!labLogos.length){g.innerHTML='<div class="empty-note" style="padding:14px">No logos yet — upload an image above.</div>';return;}
@@ -1597,6 +1939,16 @@ function renderLogoGrid(){
     };
     g.appendChild(c);
   });
+}
+/* small printer status next to the account controls; hidden entirely when
+   the page can't reach a printer (i.e. served over https) */
+function renderPrinterChip(){
+  const c=document.getElementById('printerChip'); if(!c)return;
+  if(!canPrint()||!accessToken){ c.style.display='none'; return; }
+  c.style.display='inline-flex';
+  c.className='prn-chip'+(printerOnline?' on':'');
+  c.innerHTML=`<span class="prn-dot"></span>⎙ ${printerIP?esc(printerIP):'no printer'}`;
+  c.onclick=()=>{ activeNav='printer'; prnTab='paper'; renderNav(); renderPrinter(); };
 }
 function setPrnState(kind,text){
   const el=document.getElementById('prn_state'); if(!el)return;
