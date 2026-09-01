@@ -137,8 +137,8 @@
   .btn{padding:12px 22px;border-radius:var(--r);font-weight:700;letter-spacing:.5px;font-size:13px;transition:.15s}
   .btn-acc{background:var(--acc);color:#fff}
   .btn-acc:hover{background:#2559d0}
-  .btn-blue{background:var(--acc2);color:#fff}
-  .btn-blue:hover{background:#0b8676}
+  .btn-blue{background:var(--acc);color:#fff}
+  .btn-blue:hover{background:#2559d0}
   .btn-out{background:#fff;border:1px solid var(--line);color:var(--ink)}
   .btn-out:hover{border-color:var(--ink)}
 
@@ -190,7 +190,7 @@
   .tasklist{display:flex;flex-direction:column;gap:6px}
   .taskrow{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:9px 12px;background:#fff;border:1px solid var(--line);border-radius:var(--r);font-size:14px}
   .taskdel{background:transparent;color:var(--mute);font-size:12px;padding:2px 6px;border-radius:4px}
-  .taskdel:hover{color:var(--warn)}
+  .taskdel:hover{color:var(--ink);background:var(--panel2)}
   input[type=checkbox]{accent-color:var(--acc)}
 
   .filelink{display:inline-block;color:var(--acc2);text-decoration:none;font-weight:600;font-size:14px;padding:8px 0;word-break:break-all}
@@ -381,7 +381,7 @@
   .chip:hover{border-color:var(--acc);color:var(--acc)}
   .chip:active{cursor:grabbing}
   .chipx{position:absolute;right:6px;top:50%;transform:translateY(-50%);color:var(--mute);font-size:13px;line-height:1}
-  .chipx:hover{color:var(--warn)}
+  .chipx:hover{color:var(--ink)}
 
   .sugbox{position:absolute;left:0;right:0;top:100%;margin-top:4px;background:#fff;
     border:1px solid var(--line);border-radius:8px;box-shadow:var(--shadow-lg);
@@ -407,7 +407,7 @@
     background:var(--panel2);border:1px solid var(--line);border-radius:6px;padding:6px 4px;text-align:center}
   .snum:active{cursor:grabbing}
   .xbtn{background:transparent;color:var(--mute);font-size:16px;line-height:1;padding:4px;border-radius:5px}
-  .xbtn:hover{background:#fdeceb;color:var(--warn)}
+  .xbtn:hover{background:var(--panel2);color:var(--ink)}
 
   .modetog{display:flex;gap:6px;margin:12px 0}
   .tbtn{padding:8px 15px;border-radius:var(--r);border:1px solid var(--line);background:#fff;
@@ -423,13 +423,13 @@
   .lcard .lmeta{font-size:10px;color:var(--mute);margin-top:2px}
   .lcard .ld{position:absolute;top:5px;right:5px;background:transparent;color:var(--mute);
     font-size:12px;padding:2px 5px;border-radius:5px}
-  .lcard .ld:hover{background:#fdeceb;color:var(--warn)}
+  .lcard .ld:hover{background:var(--panel2);color:var(--ink)}
 
   .xlsx-btn{display:flex;align-items:center;gap:13px;width:100%;
     padding:14px 16px;border-radius:10px;text-decoration:none;
-    background:linear-gradient(135deg,#0e9f8c,#0b8676);color:#fff;
-    box-shadow:0 2px 8px rgba(14,159,140,.30);transition:.15s}
-  .xlsx-btn:hover{transform:translateY(-1px);box-shadow:0 6px 16px rgba(14,159,140,.42)}
+    background:linear-gradient(135deg,#2f6df6,#2559d0);color:#fff;
+    box-shadow:0 2px 8px rgba(47,109,246,.30);transition:.15s}
+  .xlsx-btn:hover{transform:translateY(-1px);box-shadow:0 6px 16px rgba(47,109,246,.42)}
   .xlsx-ico{display:grid;place-items:center;width:40px;height:40px;flex-shrink:0;
     background:rgba(255,255,255,.20);border-radius:9px}
   .xlsx-txt{display:flex;flex-direction:column;line-height:1.35;min-width:0}
@@ -437,18 +437,30 @@
   .xlsx-txt small{font-size:11.5px;opacity:.88}
   .xlsx-arrow{margin-left:auto;font-size:17px;opacity:.85}
 
+  /* sample popup header: name, material, actions */
+  .smp-head{display:flex;justify-content:space-between;align-items:flex-start;gap:14px;
+    flex-wrap:wrap;padding-bottom:14px;margin-bottom:16px;border-bottom:1px solid var(--line)}
+  .smp-name{font-size:20px;font-weight:900;letter-spacing:-.3px;line-height:1.2}
+  .smp-mat{display:flex;align-items:center;gap:8px;margin-top:6px}
+  .smp-mat .lbl{font-size:10px;font-weight:800;letter-spacing:1px;text-transform:uppercase;
+    color:var(--mute);background:var(--panel2);border:1px solid var(--line);
+    padding:3px 8px;border-radius:20px}
+  .smp-mat .val{font-size:14px;font-weight:600;color:var(--ink)}
+  .smp-mat .val.none{color:var(--mute);font-style:italic;font-weight:400}
+  .smp-acts{display:flex;gap:8px;flex-wrap:wrap}
+
   .stage-head{display:flex;justify-content:space-between;align-items:center;
     font-size:11px;font-weight:800;letter-spacing:.4px;text-transform:uppercase;
     color:var(--mute);margin:8px 0 5px}
   .stage-clear{background:transparent;color:var(--mute);font-size:11px;font-weight:700;
     text-decoration:underline;padding:2px 4px}
-  .stage-clear:hover{color:var(--warn)}
+  .stage-clear:hover{color:var(--ink)}
   .stage-row{display:flex;align-items:center;gap:8px;padding:6px 9px;background:#fff;
     border:1px solid var(--line);border-radius:6px;margin-bottom:4px;font-size:12px}
   .stage-n{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--ink)}
   .stage-s{color:var(--mute);font-size:11px;white-space:nowrap}
   .stage-x{background:transparent;color:var(--mute);font-size:12px;padding:1px 5px;border-radius:4px;line-height:1}
-  .stage-x:hover{background:#fdeceb;color:var(--warn)}
+  .stage-x:hover{background:var(--panel2);color:var(--ink)}
   .stage-list{max-height:150px;overflow-y:auto}
 
   .syncstate{display:inline-flex;align-items:center;gap:6px;font-size:11px;font-weight:700;
@@ -515,7 +527,7 @@
       <p id="confirmMsg" style="font-size:14px;line-height:1.6;color:var(--ink);margin-bottom:20px"></p>
       <div style="display:flex;gap:9px">
         <button class="btn btn-out" style="flex:1" id="confirmNo">Cancel</button>
-        <button class="btn" style="flex:1;background:var(--warn);color:#fff" id="confirmYes">Delete</button>
+        <button class="btn btn-acc" style="flex:1" id="confirmYes">Delete</button>
       </div>
     </div>
   </div>
@@ -2192,7 +2204,7 @@ function openModal(title,html,wide){
   document.querySelector('#modalBg .modal').style.maxWidth=wide?'900px':'640px';
   document.getElementById('modalBg').classList.add('open');
 }
-function closeModal(){laserEditing=false;document.getElementById('modalBg').classList.remove('open');}
+function closeModal(){laserEditing=false;detailsEditing=false;document.getElementById('modalBg').classList.remove('open');}
 /* popups close only via the ✕ button (or an explicit Cancel), so a stray
    click or keypress can never discard a half-finished recipe */
 
@@ -2895,6 +2907,58 @@ function detachRecipe(p,si){
     });
 }
 
+/* ---------- INLINE SAMPLE DETAILS EDITING (name + material) ---------- */
+let detailsEditing = false;
+function startDetailsEdit(p,si){ detailsEditing=true;  showSample(p,si); }
+function cancelDetailsEdit(p,si){ detailsEditing=false; showSample(p,si); }
+async function saveDetailsEdit(p,si){
+  const sm=p.data.samples[si];
+  const label=(document.getElementById('sd_label').value||'').trim();
+  if(!label){toast('Sample name cannot be empty',true);return;}
+  if(p.data.samples.some((x,i)=>i!==si&&(x.label||'').toLowerCase()===label.toLowerCase())){
+    toast('Another sample already uses that name',true);return;}
+  sm.label=label;
+  sm.material=document.getElementById('sd_material').value.trim();
+  try{ await saveProject(p); await writeParamsExcel(p); }
+  catch(e){ toast('Could not save: '+e.message,true); return; }
+  detailsEditing=false;
+  toast('Sample updated'); renderSamples(p); showSample(p,si);
+}
+/* the header block at the top of the sample popup */
+function sampleHeadHtml(sm,si){
+  if(detailsEditing){
+    return `<div class="smp-head">
+      <div style="flex:1;min-width:220px">
+        <div class="two">
+          <div class="field" style="margin:0"><label>Sample name</label>
+            <input id="sd_label" value="${esc(sm.label||'')}"></div>
+          <div class="field" style="margin:0"><label>Material</label>
+            <input id="sd_material" value="${esc(sm.material||'')}" placeholder="e.g. Ti-6Al-4V"></div>
+        </div>
+      </div>
+      <div class="smp-acts">
+        <button class="btn btn-acc" style="padding:9px 16px;font-size:13px"
+          onclick="saveDetailsEdit(projects[selectedProjectIndex],${si})">Save</button>
+        <button class="btn btn-out" style="padding:9px 16px;font-size:13px"
+          onclick="cancelDetailsEdit(projects[selectedProjectIndex],${si})">Cancel</button>
+      </div>
+    </div>`;
+  }
+  return `<div class="smp-head">
+    <div>
+      <div class="smp-name">${esc(sm.label)}</div>
+      <div class="smp-mat"><span class="lbl">Material</span>
+        <span class="val${sm.material?'':' none'}">${sm.material?esc(sm.material):'not specified'}</span></div>
+    </div>
+    <div class="smp-acts">
+      <button class="btn btn-acc" style="padding:9px 16px;font-size:13px"
+        onclick="startDetailsEdit(projects[selectedProjectIndex],${si})">✎ Edit sample</button>
+      <button class="btn btn-blue" style="padding:9px 16px;font-size:13px"
+        onclick="openSampleFolder(projects[selectedProjectIndex],${si})">📁 Open folder</button>
+    </div>
+  </div>`;
+}
+
 /* ---------- INLINE LASER EDITING (inside the popup) ---------- */
 let laserEditing = false;          // true while the laser fields are unlocked
 
@@ -2902,12 +2966,6 @@ let laserEditing = false;          // true while the laser fields are unlocked
 function laserEditHtml(sm){
   const L = sm.laser || {};
   return `
-    <div class="two">
-      <div class="field"><label>Sample label</label>
-        <input id="s_label" value="${esc(sm.label||'')}"></div>
-      <div class="field"><label>Material</label>
-        <input id="s_material" value="${esc(sm.material||'')}"></div>
-    </div>
     <div class="subgrid" style="gap:0 22px">
       <div>
         ${prow('Wavelength','l_wavelength',L.wavelength,'l_wavelength_u',L.wavelength_u,['nm','µm'],'nm')}
@@ -2943,12 +3001,6 @@ function startLaserInline(p,si,back){ laserEditing=true;  reopen(p,si,back); }
 function cancelLaserInline(p,si,back){ laserEditing=false; reopen(p,si,back); }
 async function saveLaserInline(p,si,back){
   const sm=p.data.samples[si];
-  const label=(document.getElementById('s_label').value||'').trim();
-  if(!label){toast('Sample label cannot be empty',true);return;}
-  if(p.data.samples.some((x,i)=>i!==si&&(x.label||'').toLowerCase()===label.toLowerCase())){
-    toast('Another sample already uses that label',true);return;}
-  sm.label=label;
-  sm.material=document.getElementById('s_material').value.trim();
   sm.laser={
     wavelength:v('l_wavelength'),wavelength_u:v('l_wavelength_u'),
     power:v('l_power'),power_u:v('l_power_u'),
@@ -2972,8 +3024,8 @@ async function saveLaserInline(p,si,back){
 function showSample(p,si){
   // refresh this sample's files from Drive, then redraw the modal if it changed
   // (never while the fields are unlocked — that would discard typing)
-  if(!laserEditing) syncSampleFiles(p,si,true).then(changed=>{
-    if(changed&&!laserEditing&&document.getElementById('modalBg').classList.contains('open')){
+  if(!laserEditing&&!detailsEditing) syncSampleFiles(p,si,true).then(changed=>{
+    if(changed&&!laserEditing&&!detailsEditing&&document.getElementById('modalBg').classList.contains('open')){
       showSample(p,si); renderSamples(p);
     }
   });
@@ -2992,8 +3044,8 @@ function showSample(p,si){
     </div>`
     :'<div class="empty-note" style="padding:14px">No photos or files uploaded for this sample yet.</div>';
 
-  openModal(`<span class="tag file">SAMPLE</span> ${esc(sm.label)}
-      <span style="font-weight:500;color:var(--mute);font-size:13px">${esc(sm.material||'')}</span>`,
+  openModal(`<span class="tag file">SAMPLE</span> ${esc(sm.label)}`,
+    sampleHeadHtml(sm,si)+
     `<div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:10px">
        <h3 style="font-size:12px;letter-spacing:1.3px;text-transform:uppercase;margin:0">
          <span class="tag laser">LASER</span> Parameters</h3>
@@ -3022,10 +3074,8 @@ function showSample(p,si){
        <span class="tag file">FILES</span> ${files.length} item(s)${photos.length?` · ${photos.length} photo(s)`:''}${others.length?` · ${others.length} other`:''}</h3>
      ${thumbs}
 
-     <div style="display:flex;gap:9px;flex-wrap:wrap;margin-top:20px">
-       <button class="btn btn-acc" onclick="startLaserInline(projects[selectedProjectIndex],${si},'sample')">✎ Edit sample</button>
-       <button class="btn btn-blue" onclick="openSampleFolder(projects[selectedProjectIndex],${si})">📁 Open photos folder</button>
-       <button class="btn btn-out" onclick="showFiles(projects[selectedProjectIndex],${si})">⬆ Upload files</button>
+     <div style="display:flex;gap:9px;flex-wrap:wrap;margin-top:16px">
+       <button class="btn btn-acc" onclick="showFiles(projects[selectedProjectIndex],${si})">⬆ Upload files</button>
      </div>`,true);
 }
 
