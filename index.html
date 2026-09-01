@@ -480,10 +480,10 @@
 
 <div id="toast" class="toast"></div>
 
-<div class="modal-bg" id="modalBg" onclick="if(event.target===this)closeModal()">
+<div class="modal-bg" id="modalBg">
   <div class="modal">
     <div class="modal-head"><h3 id="modalTitle"></h3>
-      <button class="modal-x" onclick="closeModal()">✕</button></div>
+      <button class="modal-x" onclick="closeModal()" title="Close">✕</button></div>
     <div class="modal-body" id="modalBody"></div>
   </div>
 </div>
@@ -526,13 +526,42 @@ function showConfigWarn(){
 }
 
 /* ---------- Google init ---------- */
+let initError='';
 function gapiInit(){
+  if(typeof gapi==='undefined'){
+    initError='Google API script did not load. An ad-blocker or the network may be blocking apis.google.com.';
+    showInitError(); return;
+  }
   gapi.load('client',async()=>{
-    await gapi.client.init({apiKey:API_KEY,discoveryDocs:['https://www.googleapis.com/discovery/v1/apis/drive/v3/rest']});
-    gapiReady=true;
+    try{
+      await gapi.client.init({apiKey:API_KEY,
+        discoveryDocs:['https://www.googleapis.com/discovery/v1/apis/drive/v3/rest']});
+      gapiReady=true; initError=''; hideInitError();
+    }catch(e){
+      const detail=(e&&(e.details||e.message))||JSON.stringify(e||{});
+      initError='Google could not start on this address ('+location.origin+').\n\n'+detail+
+        '\n\nMost likely: this address is not allowed for your API key. In Google Cloud Console → '+
+        'Credentials → your API key → Application restrictions → Websites, add:\n    '+
+        location.origin+'/*\n\nAnd under your OAuth Client ID → Authorized JavaScript origins, add:\n    '+
+        location.origin+'   (no wildcard, no trailing slash)';
+      console.error('[LABCORE] gapi init failed',e);
+      showInitError();
+    }
   });
 }
+function showInitError(){
+  const el=document.getElementById('configWarn'); if(!el)return;
+  el.innerHTML='<div class="config-warn" style="white-space:pre-wrap;text-align:left">'+
+    esc(initError)+'</div>';
+}
+function hideInitError(){
+  const el=document.getElementById('configWarn'); if(el)el.innerHTML='';
+}
 function gisInit(){
+  if(typeof google==='undefined'||!google.accounts||!google.accounts.oauth2){
+    initError='Google sign-in script did not load. An ad-blocker or the network may be blocking accounts.google.com.';
+    showInitError(); return;
+  }
   tokenClient=google.accounts.oauth2.initTokenClient({
     client_id:CLIENT_ID, scope:SCOPES,
     callback:async(resp)=>{
@@ -547,12 +576,19 @@ function gisInit(){
 window.onload=()=>{
   if(configMissing()){showConfigWarn();return;}
   gapiInit(); gisInit();
+  // the two Google scripts sometimes arrive late; retry once
+  setTimeout(()=>{ if(!gapiReady&&!initError)gapiInit();
+                   if(!gisReady&&!initError)gisInit(); },1500);
 };
 
 document.getElementById('homeLink').onclick=()=>{ if(accessToken) goProjects(); };
 document.getElementById('authBtn').onclick=()=>{
   if(configMissing()){showConfigWarn();toast('Set CLIENT_ID and API_KEY first',true);return;}
-  if(!gapiReady||!gisReady){toast('Google libraries still loading…',true);return;}
+  if(!gapiReady||!gisReady){
+    if(initError){ showInitError(); toast('Google could not start — see the message above',true); }
+    else{ toast('Still connecting to Google — try again in a second',true); }
+    return;
+  }
   if(accessToken){ // disconnect
     google.accounts.oauth2.revoke(accessToken,()=>{});
     accessToken=null; location.reload(); return;
@@ -2050,7 +2086,8 @@ function openModal(title,html,wide){
   document.getElementById('modalBg').classList.add('open');
 }
 function closeModal(){document.getElementById('modalBg').classList.remove('open');}
-document.addEventListener('keydown',e=>{if(e.key==='Escape')closeModal();});
+/* popups close only via the ✕ button (or an explicit Cancel), so a stray
+   click or keypress can never discard a half-finished recipe */
 
 /* ---------- EDIT PROJECT (name, status, priority, deadline, description, people) ---------- */
 function openProjectEdit(p){
