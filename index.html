@@ -615,6 +615,214 @@ let tokenClient, gapiReady=false, gisReady=false, accessToken=null;
 let rootFolderId=null;
 let projects=[];           // {id(driveFileId), folderId, data:{...}}
 let selectedProjectIndex=-1;
+/* LABCORE maintenance patch: stable identities, validation and guarded writes. */
+const cloneData=x=>x===undefined?undefined:JSON.parse(JSON.stringify(x));
+const isRecord=x=>x!==null&&typeof x==='object'&&!Array.isArray(x);
+const textValue=x=>x===null||x===undefined?'':String(x);
+const newId=()=>crypto.randomUUID?crypto.randomUUID():Array.from(crypto.getRandomValues(new Uint8Array(16)),b=>b.toString(16).padStart(2,'0')).join('');
+function legacyId(kind,seed){
+  // Deterministic migration: two clients opening the same old file get the same IDs.
+  let a=2166136261,b=2246822507,c=3266489909,d=668265263;
+  for(const ch of seed){const n=ch.codePointAt(0);a=Math.imul(a^n,16777619);b=Math.imul(b^n,3266489917);c=Math.imul(c^n,668265263);d=Math.imul(d^n,374761393);}
+  return kind+'-'+[a,b,c,d].map(n=>(n>>>0).toString(16).padStart(8,'0')).join('');
+}
+function recordId(value,fallback){
+  if(!value)return fallback;
+  if(typeof value!=='string'||!/^[-a-zA-Z0-9_]{1,100}$/.test(value))throw new Error('Invalid record ID in shared data');
+  return value;
+}
+function safeUrl(value,image=false){
+  const s=textValue(value);
+  if(image&&/^data:image\/(png|jpeg|webp);base64,[A-Za-z0-9+/=]+$/.test(s))return s;
+  try{
+    const u=new URL(s);
+    const allowed=['drive.google.com','docs.google.com','drive.usercontent.google.com','googleusercontent.com'];
+    if(u.protocol==='https:'&&!u.username&&!u.password&&
+       (allowed.includes(u.hostname)||u.hostname.endsWith('.googleusercontent.com')))return u.href;
+  }catch(e){}
+  return image?'':'#';
+}
+function normalizeRecipe(rec){
+  if(!isRecord(rec))return undefined;
+  const out={...rec};
+  for(const k of ['sampleName','recipeDateTime','printedAt','footer','logo','freeText'])out[k]=textValue(rec[k]);
+  out.mode=rec.mode==='free'?'free':'chem';out.big=!!rec.big;
+  out.rows=(Array.isArray(rec.rows)?rec.rows:[]).map((r,i)=>{
+    if(!isRecord(r))throw new Error('Invalid recipe step in shared data');
+    return {...r,index:i+1,step:textValue(r.step),time:textValue(r.time),unit:textValue(r.unit),
+      us:r.us===true,temp:textValue(r.temp),notes:textValue(r.notes)};
+  });
+  return out;
+}
+function normalizeAttachment(f){
+  if(!isRecord(f)||typeof f.id!=='string'||!/^[-\w]+$/.test(f.id))throw new Error('Invalid attachment in shared data');
+  return {...f,name:textValue(f.name),type:['photo','drawing','report'].includes(f.type)?f.type:'report',
+    link:safeUrl(f.link),thumb:safeUrl(f.thumb,true)};
+}
+const LASER_FIELDS={
+  wavelength:['Wavelength',['nm','µm'],false],power:['Average power',['mW','W'],true],
+  energy:['Pulse energy',['nJ','µJ','mJ'],true],frequency:['Frequency',['Hz','kHz','MHz'],false],
+  pulse:['Pulse duration',['fs','ps','ns','µs'],false],speed:['Scan speed',['mm/s','m/s'],true],
+  spot:['Spot size',['µm','mm'],false],hatch:['Hatch spacing',['µm','mm'],false]
+};
+function validateLaser(laser){
+  const l={...(laser||{})};
+  for(const [key,[label,units,allowZero]] of Object.entries(LASER_FIELDS)){
+    const raw=textValue(l[key]).trim();l[key]=raw;
+    if(raw==='')continue; // Incomplete drafts remain valid.
+    if(!/^[+]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?$/i.test(raw)||!Number.isFinite(Number(raw))||
+       (allowZero?Number(raw)<0:Number(raw)<=0))throw new Error(label+' must be a '+(allowZero?'non-negative':'positive')+' number (use a decimal point).');
+    if(!units.includes(l[key+'_u']))throw new Error('Choose a valid unit for '+label.toLowerCase()+'.');
+  }
+  const passes=textValue(l.passes).trim();l.passes=passes;
+  if(passes&&(!/^\d+$/.test(passes)||!Number.isSafeInteger(Number(passes))||Number(passes)<1))throw new Error('Passes must be a positive whole number.');
+  return l;
+}
+function validateProjectChanges(data,base){
+  const labels=new Set(),ids=new Set();
+  for(const sm of data.samples||[]){
+    if(!sm.label.trim())throw new Error('Every sample needs a label.');
+    const label=sm.label.trim().toLowerCase();
+    if(labels.has(label)||ids.has(sm.id))throw new Error('Duplicate sample label or ID. Rename the duplicate before saving.');
+    labels.add(label);ids.add(sm.id);
+    const old=base?.samples?.find(s=>s.id===sm.id);
+    if(!old||!same(old.laser,sm.laser))sm.laser=validateLaser(sm.laser);
+  }
+}
+async function sampleFolder(p,sm,create=false){
+  if(sm.folderId){
+    if(p.data.samples.some(other=>other!==sm&&other.id!==sm.id&&other.folderId===sm.folderId))
+      throw new Error('These samples share a legacy folder. Separate their files in Drive and correct the folder IDs before uploading or syncing.');
+    return sm.folderId;
+  }
+  if(sm.legacyFolderName){
+    const old=await findSubfolder(sm.legacyFolderName,p.folderId);
+    if(old){
+      if(p.data.samples.some(other=>other.id!==sm.id&&(other.folderId===old||other.legacyFolderName===sm.legacyFolderName)))
+        throw new Error('Ambiguous legacy sample folder. Separate these samples in Drive before uploading or syncing.');
+      sm.folderId=old;return old;
+    }
+  }
+  if(!create)return null;
+  sm.id=sm.id||newId();
+  sm.folderId=await ensureSubfolder('Sample_'+sm.id,p.folderId);
+  return sm.folderId;
+}
+function conflict(path){
+  const e=new Error('Another user changed '+path+'. Your draft has been kept. Download the draft or load the latest version before resolving this conflict.');
+  e.conflict=true;throw e;
+}
+function mergeRecord(base,ours,theirs,path='record'){
+  if(same(ours,base))return cloneData(theirs);
+  if(same(theirs,base)||same(ours,theirs))return cloneData(ours);
+  if(!isRecord(base)||!isRecord(ours)||!isRecord(theirs))return conflict(path);
+  const out={};
+  for(const k of new Set([...Object.keys(base),...Object.keys(ours),...Object.keys(theirs)])){
+    if(['__proto__','prototype','constructor'].includes(k))continue;
+    const value=mergeRecord(base[k],ours[k],theirs[k],path+'.'+k);
+    if(value!==undefined)out[k]=value;
+  }
+  return out;
+}
+function mergeKeyed(base=[],ours=[],theirs=[],keyOf,mergeItem,path){
+  const maps=[base,ours,theirs].map(arr=>{
+    const m=new Map();for(const x of arr){const k=keyOf(x);if(m.has(k))conflict(path+' (duplicate identity)');m.set(k,x);}return m;
+  });
+  const [bm,om,tm]=maps,out=[];
+  for(const key of new Set([...tm.keys(),...om.keys()])){
+    const b=bm.get(key),o=om.get(key),t=tm.get(key);let v;
+    if(same(o,b))v=t;
+    else if(same(t,b)||same(o,t))v=o;
+    else if(o&&t&&b)v=mergeItem(b,o,t,path+'.'+key);
+    else conflict(path+'.'+key+' (edit/delete or duplicate creation)');
+    if(v!==undefined)out.push(cloneData(v));
+  }
+  return out;
+}
+async function projectMeta(fileId){
+  // v2 exposes a file ETag in JSON; v3 does not expose that field.
+  const r=await gapi.client.request({path:'/drive/v2/files/'+encodeURIComponent(fileId),
+    params:{fields:'id,etag,modifiedDate',supportsAllDrives:true}});
+  if(!r.result?.etag)throw new Error('Drive did not provide a revision token. Save stopped to protect shared changes.');
+  return r.result;
+}
+async function readProjectVersion(fileId){
+  for(let attempt=0;attempt<3;attempt++){
+    const before=await projectMeta(fileId),data=await fetchProjectData(fileId),after=await projectMeta(fileId);
+    if(before.etag===after.etag)return {data,etag:after.etag,mtime:after.modifiedDate};
+  }
+  throw new Error('Project is changing while being read. Please try again.');
+}
+async function writeProjectVersion(fileId,data,etag){
+  if(!etag)throw new Error('Missing revision token; save stopped.');
+  const r=await gapi.client.request({path:'/upload/drive/v2/files/'+encodeURIComponent(fileId),method:'PUT',
+    params:{uploadType:'media',fields:'id,etag,modifiedDate',supportsAllDrives:true},
+    headers:{'Content-Type':'application/json; charset=UTF-8','If-Match':etag},body:JSON.stringify(data,null,2)});
+  return r.result;
+}
+const projectWrites=new WeakMap();let pendingWrites=0;
+const failedDrafts=new Map();
+function downloadDraft(p){
+  const data=failedDrafts.get(p.jsonId)||p.data;
+  const url=URL.createObjectURL(new Blob([JSON.stringify(data,null,2)],{type:'application/json'}));
+  const a=document.createElement('a');a.href=url;a.download='labcore-unsaved-draft.json';a.click();
+  setTimeout(()=>URL.revokeObjectURL(url),1000);
+}
+function showDraftRecovery(p){
+  let box=document.getElementById('draftRecovery');
+  if(!box){box=document.createElement('div');box.id='draftRecovery';box.className='config-warn';document.getElementById('mainView').prepend(box);}
+  box.textContent='Some changes are not saved to Drive. ';
+  const download=document.createElement('button');download.className='btn btn-out';download.textContent='Download my draft';download.onclick=()=>downloadDraft(p);box.appendChild(download);
+  const reload=document.createElement('button');reload.className='btn btn-out';reload.textContent='Load latest version';
+  reload.onclick=()=>askConfirm('Load latest version?','This replaces the unsaved project draft. Download it first if you want to keep it.','Load latest',async()=>{
+    try{const remote=await readProjectVersion(p.jsonId);p.data=remote.data;p.base=cloneData(remote.data);p.mtime=remote.mtime;
+      failedDrafts.delete(p.jsonId);closeModal();renderProject();}
+    catch(e){toast('Could not load: '+e.message,true);}
+  });box.appendChild(reload);
+}
+async function commitProject(p,base,ours){
+  try{
+    for(let attempt=0;attempt<3;attempt++){
+      const remote=await readProjectVersion(p.jsonId);
+      if(!base)throw new Error('No original project revision is available. Reload the project before saving.');
+      const next=mergeProject(base,ours,remote.data);
+      validateProjectChanges(next,remote.data);
+      const id=newId();
+      next._revision=id;next._updatedAt=new Date().toISOString();
+      // Preserve both the remote state and this candidate before replacing project.json.
+      // These are recoverable snapshots, not a tamper-proof audit trail.
+      await writeJson('project_revision_'+id+'.json',p.folderId,{kind:'save-attempt',at:next._updatedAt,
+        actor:document.getElementById('userEmail')?.textContent||'',baseEtag:remote.etag,before:remote.data,candidate:next});
+      try{
+        const written=await writeProjectVersion(p.jsonId,next,remote.etag);
+        // Keep edits made locally while this request was in flight.
+        let current;
+        try{current=mergeProject(ours,p.data,next);}
+        catch(e){throw new Error('The submitted changes were saved, but newer local edits conflict with the saved version. Download your draft before reloading.');}
+        p.data=current;p.base=cloneData(next);p.mtime=written.modifiedDate||null;
+        failedDrafts.delete(p.jsonId);document.getElementById('draftRecovery')?.remove();
+        return;
+      }catch(e){
+        const status=e.status||e.result?.error?.code;
+        if(status===412&&attempt<2)continue;
+        if(status===412)throw new Error('Project changed repeatedly during saving. Your draft is kept; try again.');
+        throw e;
+      }
+    }
+  }catch(e){failedDrafts.set(p.jsonId,cloneData(p.data));showDraftRecovery(p);throw e;}
+}
+window.addEventListener('beforeunload',event=>{
+  if(pendingWrites||savingBusy||failedDrafts.size){event.preventDefault();event.returnValue='';}
+});
+function checkRecipeLoggerUrl(value){
+  const u=new URL(value);
+  if(u.protocol!=='https:'||u.hostname!=='script.google.com'||!/^\/macros\/s\/[-\w]+\/exec$/.test(u.pathname)||u.username||u.password)
+    throw new Error('Use the HTTPS script.google.com/macros/s/.../exec URL.');
+  return u.href;
+}
+let printerQueue=Promise.resolve();
+function queuePrinter(fn){const run=printerQueue.catch(()=>{}).then(fn);printerQueue=run;return run;}
+
 
 /* ---------- UI helpers ---------- */
 function toast(msg,isErr){
@@ -877,7 +1085,8 @@ async function writeJson(name,parentId,obj,existingId){
 }
 async function readJson(fileId){
   const r=await gapi.client.drive.files.get({fileId,alt:'media'});
-  return typeof r.result==='string'?JSON.parse(r.result):r.result;
+  return JSON.parse(typeof r.result==='string'?r.result:JSON.stringify(r.result),
+    (key,value)=>['__proto__','constructor','prototype'].includes(key)?undefined:value);
 }
 /* upload a binary File object */
 async function uploadFile(file,parentId){
@@ -953,12 +1162,8 @@ function inferType(f){
 async function syncSampleFiles(p,si,save){
   const sm=p.data.samples[si];
   try{
-    let fid=sm.folderId;
-    if(!fid){
-      fid=await findSubfolder('Sample_'+sm.label.replace(/[^\w-]+/g,'_'),p.folderId);
-      if(!fid)return false;                 // no folder in Drive yet
-      sm.folderId=fid;
-    }
+    const fid=await sampleFolder(p,sm,false);
+    if(!fid)return false;
     const live=await listFolderFiles(fid);
     const known={}; (sm.files||[]).forEach(f=>{if(f.id)known[f.id]=f.type;});
     const before=JSON.stringify((sm.files||[]).map(f=>f.id).sort());
@@ -1005,7 +1210,7 @@ async function syncProjectFiles(p,save){
 let labConfig={appsScriptUrl:'',presets:[]};
 let configFileId=null;
 async function loadConfig(){
-  try{ const local=localStorage.getItem('labcore_cfg');
+  try{ const local=localStorage.getItem('labcore_cfg_'+rootFolderId);
        if(local)labConfig=Object.assign(labConfig,JSON.parse(local)); }catch(e){}
   try{
     const id=await findFile('labcore_config.json',rootFolderId);
@@ -1018,24 +1223,26 @@ async function loadConfig(){
   }catch(e){ console.warn('[LABCORE] config load',e); }
 }
 async function saveConfig(){
-  try{ localStorage.setItem('labcore_cfg',JSON.stringify(labConfig)); }catch(e){}
-  try{ configFileId=await writeJson('labcore_config.json',rootFolderId,labConfig,configFileId); }
-  catch(e){ console.warn('[LABCORE] config save',e); }
+  if(labConfig.appsScriptUrl)labConfig.appsScriptUrl=checkRecipeLoggerUrl(labConfig.appsScriptUrl);
+  configFileId=await writeJson('labcore_config.json',rootFolderId,labConfig,configFileId);
+  try{localStorage.setItem('labcore_cfg_'+rootFolderId,JSON.stringify(labConfig));}catch(e){}
 }
+
 
 /* ============ RECIPE LOGGER BRIDGE (read-only; printer app untouched) ====
    Uses the existing Apps Script endpoint:  ?action=search&q=<name>&limit=N
    Returns recipes in the printer's own format:
    {printedAt, sampleName, recipeDateTime, logo, footer, rows:[{step,time,us,temp,notes}]}  */
 async function searchPrintedRecipes(q,limit){
-  const url=(labConfig.appsScriptUrl||'').trim();
+  const url=checkRecipeLoggerUrl((labConfig.appsScriptUrl||'').trim());
   if(!url)throw new Error('No Recipe Logger URL set — open Settings in the sidebar.');
   const sep=url.indexOf('?')>=0?'&':'?';
   const r=await fetch(`${url}${sep}action=search&q=${encodeURIComponent(q||'')}&limit=${limit||10}`,
                       {signal:AbortSignal.timeout(10000)});
   const j=await r.json();
   if(!j.ok)throw new Error(j.error||'search failed');
-  return j.results||[];
+  if(!Array.isArray(j.results))throw new Error('Invalid Recipe Logger response');
+  return j.results.map(normalizeRecipe).filter(Boolean);
 }
 
 /* the parameters workbook is a generated export, never an input */
@@ -1177,19 +1384,33 @@ async function loadProjects(){
 
 /* fill in defaults so projects written by older versions still work */
 function normalizeProjectData(data,folderName){
-  data.name=data.name||(folderName||'').replace(/^PRJ_/,'').replace(/_/g,' ');
-  data.status=data.status||'active';
-  data.priority=data.priority||'Medium';
-  data.deadline=data.deadline||'';
-  data.description=data.description||'';
-  data.samples=Array.isArray(data.samples)?data.samples:[];
-  data.drawings=Array.isArray(data.drawings)?data.drawings:[];
-  data.people=Array.isArray(data.people)?data.people:[];
-  data.tasks=Array.isArray(data.tasks)?data.tasks.map(t=>{
-    if(typeof t==='string')return {text:t,done:false};
-    if(t.who&&!data.people.some(x=>x.toLowerCase()===t.who.toLowerCase()))data.people.push(t.who);
-    return {text:t.text||'',done:!!t.done};
-  }):[];
+  if(!isRecord(data))throw new Error('Invalid project record');
+  data=cloneData(data);
+  data.name=textValue(data.name)||(folderName||'').replace(/^PRJ_/,'').replace(/_/g,' ');
+  data.status=['active','done','archived'].includes(data.status)?data.status:'active';
+  data.priority=['Urgent','High','Medium','Low'].includes(data.priority)?data.priority:'Medium';
+  data.deadline=/^\d{4}-\d{2}-\d{2}$/.test(data.deadline||'')?data.deadline:'';
+  data.description=textValue(data.description);
+  data.people=Array.isArray(data.people)?data.people.map(textValue):[];
+  data.tasks=(Array.isArray(data.tasks)?data.tasks:[]).map((t,i)=>{
+    if(typeof t==='string')t={text:t,done:false};
+    if(!isRecord(t))throw new Error('Invalid task');
+    if(t.who&&!data.people.some(x=>x.toLowerCase()===textValue(t.who).toLowerCase()))data.people.push(textValue(t.who));
+    return {...t,id:recordId(t.id,legacyId('task',JSON.stringify([i,t.text]))),text:textValue(t.text),done:t.done===true};
+  });
+  data.samples=(Array.isArray(data.samples)?data.samples:[]).map((sample,i)=>{
+    if(!isRecord(sample))throw new Error('Invalid sample');
+    const sm={...sample,label:textValue(sample.label),material:textValue(sample.material)};
+    if(!sm.id&&!sm.folderId)sm.legacyFolderName='Sample_'+sm.label.replace(/[^\w-]+/g,'_');
+    sm.id=recordId(sm.id,legacyId('sample',JSON.stringify([i,sm.label,sm.created||''])));
+    if(sm.folderId&&!/^[-\w]+$/.test(sm.folderId))throw new Error('Invalid sample folder ID');
+    sm.laser=isRecord(sm.laser)?Object.fromEntries(Object.entries(sm.laser).map(([k,v])=>[k,textValue(v)])):{};
+    sm.files=(Array.isArray(sm.files)?sm.files:[]).map(normalizeAttachment);
+    if(sm.recipe)sm.recipe=normalizeRecipe(sm.recipe);
+    return sm;
+  });
+  data.drawings=(Array.isArray(data.drawings)?data.drawings:[]).map(normalizeAttachment);
+  data.schemaVersion=2;
   return data;
 }
 
@@ -1199,66 +1420,47 @@ function normalizeProjectData(data,folderName){
    three-way merge (common ancestor = the copy we started from) so both
    sets of changes survive instead of one overwriting the other.        */
 const same=(a,b)=>JSON.stringify(a)===JSON.stringify(b);
-const pick=(base,ours,theirs)=>same(ours,base)?theirs:ours;   // we changed it? keep ours
-
-/* merge a list of plain strings (people) */
-function mergeStrings(base,ours,theirs,keyOf){
-  const k=x=>keyOf?keyOf(x):x;
-  const removedByUs=base.filter(b=>!ours.some(o=>k(o)===k(b))).map(k);
-  const addedByUs  =ours.filter(o=>!base.some(b=>k(b)===k(o)));
-  const out=theirs.filter(t=>!removedByUs.includes(k(t)));
-  addedByUs.forEach(a=>{ if(!out.some(o=>k(o)===k(a)))out.push(a); });
+const pick=(base,ours,theirs)=>mergeRecord(base,ours,theirs);
+function mergeStrings(base,ours,theirs,keyOf=x=>x){
+  const removed=base.filter(x=>!ours.some(y=>keyOf(x)===keyOf(y))).map(keyOf);
+  const out=theirs.filter(x=>!removed.includes(keyOf(x)));
+  ours.filter(x=>!base.some(y=>keyOf(x)===keyOf(y))).forEach(x=>{if(!out.some(y=>keyOf(y)===keyOf(x)))out.push(x);});
   return out;
 }
-/* merge a list of objects identified by a key, merging items present in both */
-function mergeObjects(base,ours,theirs,keyOf,mergeItem){
-  const find=(arr,key)=>arr.find(x=>keyOf(x)===key);
-  const removedByUs=base.filter(b=>!find(ours,keyOf(b))).map(keyOf);
-  const out=[];
-  theirs.forEach(t=>{
-    const key=keyOf(t);
-    if(removedByUs.includes(key))return;                 // we deleted it
-    const o=find(ours,key), b=find(base,key);
-    out.push(o&&b ? mergeItem(b,o,t) : (o||t));
-  });
-  ours.forEach(o=>{ if(!find(theirs,keyOf(o))&&!find(base,keyOf(o)))out.push(o); });  // we added it
-  return out;
-}
-const unionById=(a,b)=>{
-  const out=[...(a||[])];
-  (b||[]).forEach(x=>{ if(!out.some(y=>y.id===x.id))out.push(x); });
-  return out;
-};
-function mergeTask(b,o,t){
-  return {text:o.text||t.text, done:pick(b.done,o.done,t.done)};
-}
-function mergeSample(b,o,t){
-  return {
-    label:pick(b.label,o.label,t.label),
-    material:pick(b.material,o.material,t.material),
-    created:o.created||t.created,
-    folderId:o.folderId||t.folderId,
-    laser:pick(b.laser,o.laser,t.laser),
-    recipe:pick(b.recipe,o.recipe,t.recipe),
-    chem:pick(b.chem,o.chem,t.chem),
-    files:unionById(t.files,o.files)
+function mergeSample(b,o,t,path='sample'){
+  const omit=x=>Object.fromEntries(Object.entries(x).filter(([k])=>k!=='files'&&k!=='laser'));
+  const out=mergeRecord(omit(b),omit(o),omit(t),path);
+  out.files=mergeKeyed(b.files,o.files,t.files,x=>x.id,mergeRecord,path+'.files');
+  const group=l=>{
+    const x={...(l||{})};
+    for(const key of Object.keys(LASER_FIELDS)){
+      if(key in x||key+'_u' in x){x[key]={value:x[key],unit:x[key+'_u']};delete x[key+'_u'];}
+    }
+    return x;
   };
+  const bg=group(b.laser),og=group(o.laser),tg=group(t.laser);out.laser={};
+  for(const key of new Set([...Object.keys(bg),...Object.keys(og),...Object.keys(tg)])){
+    // A numeric value and its unit are one measurement, not independent edits.
+    let value;
+    if(same(og[key],bg[key]))value=tg[key];
+    else if(same(tg[key],bg[key])||same(og[key],tg[key]))value=og[key];
+    else conflict(path+'.laser.'+key);
+    if(value!==undefined){if(key in LASER_FIELDS){out.laser[key]=value.value;out.laser[key+'_u']=value.unit;}else out.laser[key]=value;}
+  }
+  return out;
 }
 function mergeProject(base,ours,theirs){
-  const out=JSON.parse(JSON.stringify(theirs));
-  ['name','status','priority','deadline','description'].forEach(k=>{
-    out[k]=pick(base[k],ours[k],theirs[k]);
-  });
-  out.people =mergeStrings(base.people||[],ours.people||[],theirs.people||[],x=>String(x).toLowerCase());
-  out.tasks  =mergeObjects(base.tasks||[],ours.tasks||[],theirs.tasks||[],
-                           t=>String(t.text||'').toLowerCase(),mergeTask);
-  out.samples=mergeObjects(base.samples||[],ours.samples||[],theirs.samples||[],
-                           s=>String(s.label||'').toLowerCase(),mergeSample);
-  out.drawings=unionById(theirs.drawings,ours.drawings);
-  out.excelId  =theirs.excelId||ours.excelId;
-  out.excelLink=theirs.excelLink||ours.excelLink;
+  const special=['people','tasks','samples','drawings','excelId','excelLink','_revision','_updatedAt'];
+  const plain=x=>Object.fromEntries(Object.entries(x).filter(([k])=>!special.includes(k)));
+  const out=mergeRecord(plain(base),plain(ours),plain(theirs),'project');
+  out.people=mergeStrings(base.people||[],ours.people||[],theirs.people||[],x=>textValue(x).toLowerCase());
+  out.tasks=mergeKeyed(base.tasks||[],ours.tasks||[],theirs.tasks||[],x=>x.id,mergeRecord,'tasks');
+  out.samples=mergeKeyed(base.samples||[],ours.samples||[],theirs.samples||[],x=>x.id,mergeSample,'samples');
+  out.drawings=mergeKeyed(base.drawings||[],ours.drawings||[],theirs.drawings||[],x=>x.id,mergeRecord,'drawings');
+  for(const key of ['excelId','excelLink','_revision','_updatedAt'])if(theirs[key]||ours[key])out[key]=theirs[key]||ours[key];
   return out;
 }
+
 async function remoteMtime(fileId){
   const r=await gapi.client.drive.files.get({fileId,fields:'modifiedTime'});
   return r.result.modifiedTime;
@@ -1270,7 +1472,7 @@ async function fetchProjectData(jsonId){
 }
 
 /* escape text for safe HTML insertion */
-function esc(s){return (s||'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
+function esc(s){return textValue(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
 
 /* ---------- Deadline helpers (date only, no time) ---------- */
 /* days remaining: negative = overdue, 0 = today */
@@ -1354,7 +1556,7 @@ async function scanDrive(){
       <div class="panelbox">
         <p style="margin-bottom:14px;color:var(--mute);line-height:1.6">
           Found <b>${files.length}</b> project file(s) across <b>${list.length}</b> folder(s).
-          The app is currently using folder <code>${rootFolderId}</code>.
+          The app is currently using folder <code>${esc(rootFolderId)}</code>.
           Click a folder below to load its projects.</p>
         <div id="scanList"></div>
       </div>`;
@@ -1366,13 +1568,17 @@ async function scanDrive(){
       row.style.marginBottom='8px';
       row.innerHTML=`<span style="line-height:1.5">
           <b>${esc(g.name)}</b> ${cur?'<span class="prio prio-medium prio-mini">IN USE</span>':''}<br>
-          <span style="font-size:12px;color:var(--mute)">${g.count} project(s) · owner: ${esc(g.owner)} · <code>${g.id}</code></span>
+          <span style="font-size:12px;color:var(--mute)">${g.count} project(s) · owner: ${esc(g.owner)} · <code>${esc(g.id)}</code></span>
         </span>
         <button class="btn ${cur?'btn-out':'btn-acc'}" style="padding:8px 14px;font-size:12px">${cur?'Reload':'Use this'}</button>`;
       row.querySelector('button').onclick=async()=>{
-        rootFolderId=g.id;
+        if(pendingWrites||savingBusy){toast('Wait for the current save or print to finish',true);return;}
+        rootFolderId=g.id;selectedProjectIndex=-1;
+        configFileId=null;logosFileId=null;printedLogId=null;printedXlsxId=null;
+        labConfig={appsScriptUrl:'',presets:[]};customPresets=[];labLogos=[];printedLog=[];lastSync={};
         try{localStorage.setItem('labcore_root',g.id);}catch(e){}
         toast('Loading projects from '+g.name);
+        await loadConfig();await loadLogos();await loadPrintedLog();
         await loadProjects();
         renderHome();
       };
@@ -1481,7 +1687,8 @@ function centerLogoOnPaper(seg){
   return {...seg,packed:out,width:PW};
 }
 /* send segments; text via /print, logos via /bitmap, feed only on the last */
-async function sendSegs(segs){
+function sendSegs(segs){return queuePrinter(()=>sendSegsNow(segs));}
+async function sendSegsNow(segs){
   for(let i=0;i<segs.length;i++){
     const seg=segs[i], feed=(i===segs.length-1);
     if(seg.type==='logo'){
@@ -1633,55 +1840,67 @@ async function runPrint(what,fn){
 
 /* Build the exact recipe printout the standalone page produced */
 function buildRecipeSegs(rec,sampleLabel,big){
-  const scale=big?2:1;
-  const name=ltAsc(rec.sampleName||sampleLabel||'');
-  const DASH='-'.repeat(CW);
-  const unitShort=u=>({min:'m.',s:'s.',h:'h.'}[u]||u||'');
-
-  const head=[ltAsc(String(rec.recipeDateTime||'')),'',DASH];
-  const titleLines=txtWrap(name,CW);
-  const body=[DASH,'Step             TIME   US  Temp',DASH];
-
-  (rec.rows||[]).forEach((r,i)=>{
-    const step=ltAsc((r.step||'-').trim());
-    const tv=ltAsc(String(r.time||'').trim());
-    const time=tv?(tv+' '+unitShort(r.unit)):'-';
-    const us=r.us?'US':'';
-    const temp=ltAsc(String(r.temp||'').trim());
-    const prefix=String(i+1).padStart(2,' ')+'. ';
-    txtWrap(step,13).forEach((chunk,ci)=>{
-      if(ci===0){
-        body.push((prefix+chunk).substring(0,17).padEnd(17)+
-                  time.substring(0,7).padEnd(7)+
-                  us.substring(0,4).padEnd(4)+
-                  temp.substring(0,6));
-      }else{
-        body.push(('    '+chunk).substring(0,17).padEnd(17));
-      }
-    });
+  rec=normalizeRecipe(rec);
+  const scale=big?2:1,W=charsForScale(scale),dash='-'.repeat(W);
+  const body=[];
+  const add=value=>txtWrap(ltAsc(textValue(value)).replace(/[\x00-\x08\x0B-\x1F\x7F]/g,''),W).forEach(line=>body.push(line));
+  add(rec.recipeDateTime);add('Sample: '+sampleLabel);
+  if(rec.sampleId)add('ID: '+rec.sampleId);
+  if(rec.printEventId)add('Print: '+rec.printEventId);
+  add(dash);
+  rec.rows.forEach((r,i)=>{
+    add((i+1)+'. '+r.step);
+    if(r.time)add('Time: '+r.time+(r.unit?' '+r.unit:''));
+    if(r.us)add('Ultrasound: yes');
+    if(r.temp)add('Temp: '+r.temp);
+    if(r.notes)add('Notes: '+r.notes);
+    add(dash);
   });
-  if(rec.footer){ body.push(DASH); txtWrap(ltAsc(rec.footer),CW).forEach(l=>body.push(l)); }
-
-  const segs=[];
-  const logo=findLogo(rec.logo);
+  if(rec.footer)add('Notes: '+rec.footer);
+  const segs=[],logo=findLogo(rec.logo);
   if(logo&&logo.packed)segs.push({type:'logo',packed:logo.packed,width:logo.w,height:logo.h});
-  segs.push({lines:head,      opts:{bold:false,center:false,size:1}});
-  segs.push({lines:titleLines,opts:{bold:true, center:true, size:scale}});
-  segs.push({lines:body,      opts:{bold:false,center:false,size:scale}});
+  segs.push({lines:txtWrap(ltAsc(rec.sampleName||sampleLabel||''),W),opts:{bold:true,center:true,size:scale}});
+  segs.push({lines:body,opts:{bold:false,center:false,size:scale}});
   return segs;
 }
+
 /* print a sample's recipe */
+const printingSamples=new Set();
 async function printSampleRecipe(p,si,big){
   const sm=p.data.samples[si];
-  if(!sm.recipe||!(sm.recipe.rows||[]).length)throw new Error('No recipe to print');
-  await sendSegs(buildRecipeSegs(sm.recipe,sm.label,big));
-  sm.recipe.printedAt=new Date().toISOString();
-  await saveProject(p);
-  try{ await recordPrintedRecipe(p,sm,sm.recipe); }
-  catch(e){ console.warn('[LABCORE] printed-log write failed',e);
-            toast('Printed, but the master log could not be updated',true); }
-  return true;
+  if(!sm.recipe||!sm.recipe.rows?.length)throw new Error('No recipe to print');
+  if(printingSamples.has(sm.id))throw new Error('This sample is already being printed.');
+  printingSamples.add(sm.id);pendingWrites++;
+  const originalRecipe=cloneData(sm.recipe);
+  const rec=normalizeRecipe(originalRecipe),eventId=newId(),root=rootFolderId;
+  rec.sampleId=sm.id;rec.printEventId=eventId;
+  const event={id:eventId,status:'pending',project:p.data.name,projectId:p.folderId,sample:sm.label,sampleId:sm.id,
+    requestedAt:new Date().toISOString(),recipe:cloneData(rec)};
+  let eventFile;
+  try{
+    // Persist the intent before sending anything, so a browser/network failure is traceable.
+    eventFile=await writeJson('print_event_'+eventId+'.json',root,event);
+    try{await sendSegs(buildRecipeSegs(rec,sm.label,big));}
+    catch(e){
+      event.status='unknown';event.error=textValue(e.message);
+      try{await writeJson('print_event_'+eventId+'.json',root,event,eventFile);}catch(logError){console.warn(logError);}
+      throw new Error('Printer result is uncertain; some or all of the job may have printed. Check the paper before retrying. '+e.message);
+    }
+    rec.printedAt=new Date().toISOString();event.printedAt=rec.printedAt;event.recipe=cloneData(rec);event.status='confirmed';
+    const warnings=[];
+    try{await writeJson('print_event_'+eventId+'.json',root,event,eventFile);printedLog.push(event);}
+    catch(e){warnings.push('print history confirmation could not be saved (the pending event remains)');}
+    // Only mark the recipe that was actually sent, even if edits arrived during printing.
+    const current=p.data.samples.find(x=>x.id===sm.id);
+    if(current&&same(current.recipe,originalRecipe)){
+      current.recipe={...current.recipe,printedAt:rec.printedAt,printEventId:eventId};
+      try{await saveProject(p);}catch(e){warnings.push('sample print timestamp could not be saved');}
+    }
+    if(!warnings.length){try{await loadPrintedLog();await writePrintedXlsx();}catch(e){warnings.push('Excel print summary could not be refreshed');}}
+    return {warning:warnings.length?'Sent to printer, but '+warnings.join('; ')+'. Do not reprint just to retry saving.':''};
+  }finally{printingSamples.delete(sm.id);pendingWrites--;}
 }
+
 
 /* ================= LOGOS (shared via Drive) ================= */
 const PW=384, BPR=48;                      // paper width in dots / bytes per row
@@ -1695,7 +1914,11 @@ async function loadLogos(){
     if(!id){labLogos=[];return;}
     logosFileId=id;
     let j=await readJson(id); if(typeof j==='string')j=JSON.parse(j);
-    labLogos=(Array.isArray(j)?j:[]).map(l=>({...l,packed:b64ToU8(l.b64||'')}));
+    labLogos=(Array.isArray(j)?j:[]).map(l=>{
+      if(!isRecord(l)||l.w!==384||!Number.isInteger(l.h)||l.h<1||l.h>240||typeof l.b64!=='string'||l.b64.length>16000)throw new Error('Invalid shared logo');
+      const packed=b64ToU8(l.b64);if(packed.length!==48*l.h)throw new Error('Invalid logo bitmap');
+      return {...l,name:textValue(l.name),prev:safeUrl(l.prev,true),packed};
+    });
   }catch(e){ console.warn('[LABCORE] logos load',e); labLogos=[]; }
 }
 async function saveLogos(){
@@ -1742,21 +1965,44 @@ function findLogo(nameOrKey){
    Kept as printed_recipes.json (source of truth) in LABCORE_DATA and
    mirrored to printed_recipes.xlsx after every print.                */
 let printedLog=[]; let printedLogId=null; let printedXlsxId=null;
+let printedCacheRoot=null;
+const printedRecordCache=new Map();
+async function cachedPrintRecord(file){
+  const cached=printedRecordCache.get(file.id);
+  if(file.modifiedTime&&cached?.mtime===file.modifiedTime)return cached.data;
+  const data=await readJson(file.id);
+  printedRecordCache.set(file.id,{mtime:file.modifiedTime,data});
+  return data;
+}
 async function loadPrintedLog(){
-  try{
-    const id=await findFile('printed_recipes.json',rootFolderId);
-    if(!id){printedLog=[];return;}
-    printedLogId=id;
-    let j=await readJson(id); if(typeof j==='string')j=JSON.parse(j);
-    printedLog=Array.isArray(j)?j:(j.entries||[]);
-  }catch(e){ console.warn('[LABCORE] printed log load',e); printedLog=[]; }
+  if(printedCacheRoot!==rootFolderId){printedRecordCache.clear();printedCacheRoot=rootFolderId;}
+  const entries=[];
+  const id=await findFile('printed_recipes.json',rootFolderId);
+  printedLogId=id;
+  if(id){
+    const meta=await gapi.client.drive.files.get({fileId:id,fields:'id,modifiedTime'});
+    const j=await cachedPrintRecord({...meta.result,id});
+    entries.push(...(Array.isArray(j)?j:(Array.isArray(j.entries)?j.entries:[])));
+  }
+  const present=new Set(id?[id]:[]);
+  let token;
+  do{
+    const r=await gapi.client.drive.files.list({q:`'${rootFolderId}' in parents and trashed=false and mimeType='application/json' and name contains 'print_event_'`,
+      fields:'nextPageToken,files(id,name,modifiedTime)',pageSize:1000,pageToken:token||undefined});
+    const files=r.result.files||[];
+    files.forEach(f=>present.add(f.id));
+    for(let i=0;i<files.length;i+=8){const batch=await Promise.all(files.slice(i,i+8).map(cachedPrintRecord));entries.push(...batch.filter(e=>e.status==='confirmed'));}
+    token=r.result.nextPageToken;
+  }while(token);
+  for(const key of printedRecordCache.keys())if(!present.has(key))printedRecordCache.delete(key);
+  const unique=new Map();
+  for(const e of entries){if(!isRecord(e))throw new Error('Invalid print history entry');
+    const item={...e,project:textValue(e.project),sample:textValue(e.sample),recipe:normalizeRecipe(e.recipe)};
+    unique.set(e.id||legacyId('print',JSON.stringify(e)),item);
+  }
+  printedLog=[...unique.values()];
 }
-async function recordPrintedRecipe(p,sm,rec){
-  printedLog.push({printedAt:rec.printedAt||new Date().toISOString(),
-    project:p.data.name,sample:sm.label,recipe:JSON.parse(JSON.stringify(rec))});
-  printedLogId=await writeJson('printed_recipes.json',rootFolderId,printedLog,printedLogId);
-  await writePrintedXlsx();
-}
+
 async function writePrintedXlsx(){
   const unitShort=u=>({min:'m.',s:'s.',h:'h.'}[u]||u||'');
   const aoa=[['Printed at','Project','Sample','Recipe date','#','Step','Time','US','Temp','Notes']];
@@ -2076,9 +2322,9 @@ function renderLogoGrid(){
   g.innerHTML='';
   labLogos.forEach(l=>{
     const c=document.createElement('div'); c.className='lcard';
-    c.innerHTML=`<img src="${l.prev}" alt="">
+    c.innerHTML=`<img src="${esc(safeUrl(l.prev,true))}" alt="">
       <div class="ln">${esc(l.name)}</div>
-      <div class="lmeta">${l.w}×${l.h}</div>
+      <div class="lmeta">${esc(l.w)}×${esc(l.h)}</div>
       <button class="ld" title="Delete">✕</button>`;
     c.querySelector('.ld').onclick=async()=>{
       labLogos=labLogos.filter(x=>x.key!==l.key);
@@ -2130,7 +2376,7 @@ function renderSettings(){
     </div>`;
   document.getElementById('cfg_save').onclick=async()=>{
     labConfig.appsScriptUrl=document.getElementById('cfg_url').value.trim();
-    await saveConfig(); toast('Settings saved');
+    try{await saveConfig();toast('Settings saved');}catch(e){toast('Settings not saved: '+e.message,true);}
   };
   document.getElementById('cfg_test').onclick=async()=>{
     const res=document.getElementById('cfg_result');
@@ -2253,7 +2499,7 @@ function tileHtml(d){
     ${d.description?`<div class="tile-desc">${esc(d.description)}</div>`:''}
     <div class="tile-foot">
       ${st==='done'?'':`<span class="dl ${dl.cls}">${dl.label}</span>`}
-      <span class="tile-stats"><span class="status-dot st-${st}"></span>${d.samples?.length||0} samples${tasks.length?` · ${doneTasks}/${tasks.length} tasks`:''}</span>
+      <span class="tile-stats"><span class="status-dot st-${esc(st)}"></span>${d.samples?.length||0} samples${tasks.length?` · ${doneTasks}/${tasks.length} tasks`:''}</span>
     </div>`;
 }
 
@@ -2451,12 +2697,12 @@ document.getElementById('newProjectBtn').onclick=()=>{
       return;
     }
 
-    const btn=document.getElementById('np_save');btn.innerHTML='<span class="loader"></span> Creating…';
+    const btn=document.getElementById('np_save');if(btn.disabled)return;btn.disabled=true;btn.innerHTML='<span class="loader"></span> Creating…';
     try{
       const folderId=await createFolder('PRJ_'+name.replace(/[^\w]+/g,'_').slice(0,40),rootFolderId);
       const data={name,status,priority,deadline,description:desc,
         people:(window._newPeople||[]).slice(),
-        tasks:(window._newTasks||[]).map(t=>({text:t.text,done:false})),
+        tasks:(window._newTasks||[]).map(t=>({id:newId(),text:t.text,done:false})),
         drawings:[],
         created:new Date().toISOString(),samples:[]};
       // upload any drawings into a Drawings subfolder
@@ -2469,13 +2715,14 @@ document.getElementById('newProjectBtn').onclick=()=>{
         }
       }
       const jsonId=await writeJson('project.json',folderId,data);
-      const p={jsonId,folderId,data};
+      const normalized=normalizeProjectData(data,'');
+      const p={jsonId,folderId,data:normalized,base:cloneData(normalized)};
       await writeParamsExcel(p);                 // create empty parameters.xlsx
-      await writeJson('project.json',folderId,data,jsonId); // save excel id back
+      await saveProject(p); // save export identity with a revision check
       projects.unshift(p);
       selectedProjectIndex=0;activeNav='projects';renderNav();renderProject();
       toast('Project created');
-    }catch(e){toast('Error: '+e.message,true);btn.textContent='Create Project';}
+    }catch(e){toast('Error: '+e.message,true);btn.textContent='Create Project';btn.disabled=false;}
   };
 };
 function addTaskToNew(){
@@ -2565,7 +2812,7 @@ function renderProject(){
     <div class="toolbar">
       <div style="display:flex;align-items:center;gap:11px;flex-wrap:wrap">
         <h2 style="margin:0">${esc(d.name)}</h2>
-        <span class="prio prio-${prio.toLowerCase()}" style="margin:0">${prio}</span>
+        <span class="prio prio-${esc(prio.toLowerCase())}" style="margin:0">${esc(prio)}</span>
         ${d.status==='done'
           ?'<span class="done-badge">✓ DONE</span>'
           :`<span class="dl ${deadlineInfo(d.deadline).cls}">${deadlineInfo(d.deadline).label}</span>`}
@@ -2680,7 +2927,7 @@ function renderProject(){
 /* ---------- automatic Drive sync when a project is opened ----------
    Skipped if the same project was synced moments ago, so the many
    renderProject() calls after small edits don't hammer the Drive API. */
-const SYNC_TTL=20000;                 // ms before the same project re-syncs
+const SYNC_TTL=60000;                 // ms before the same project re-syncs
 let lastSync={};                      // folderId -> timestamp
 async function autoSync(p,force){
   const now=Date.now();
@@ -2806,7 +3053,7 @@ function setBusy(on, msg){
     x.title = on ? 'Please wait — saving' : 'Close';
   }
   // freeze the buttons inside the popup too
-  document.querySelectorAll('#modalBody .btn').forEach(el=>{
+  document.querySelectorAll('#modalBody button,#modalBody input,#modalBody textarea,#modalBody select').forEach(el=>{
     el.disabled = on;
     el.style.opacity = on ? '.5' : '1';
     el.style.pointerEvents = on ? 'none' : 'auto';
@@ -2867,7 +3114,7 @@ function openProjectEdit(p){
               ${['Urgent','High','Medium','Low'].map(x=>`<option${d.priority===x?' selected':''}>${x}</option>`).join('')}
             </select></div>
           <div class="field"><label>Deadline<span class="req">*</span></label>
-            <input type="date" id="ep_deadline" value="${d.deadline||''}"></div>
+            <input type="date" id="ep_deadline" value="${esc(d.deadline||'')}"></div>
         </div>
         <div class="field" style="margin-bottom:0"><label>Description<span class="req">*</span></label>
           <textarea id="ep_desc" rows="3">${esc(d.description||'')}</textarea></div>
@@ -2937,7 +3184,7 @@ async function addProjectTask(){
   const inp=document.getElementById('pj_taskinput');
   const v=inp.value.trim();if(!v)return;
   p.data.tasks=p.data.tasks||[];
-  p.data.tasks.push({text:v,done:false});
+  p.data.tasks.push({id:newId(),text:v,done:false});
   inp.value='';inp.focus();
   await saveProject(p);renderProjectTasks(p);
 }
@@ -2990,8 +3237,8 @@ function renderDrawings(p){
   g.innerHTML='';
   dr.forEach(f=>{
     const d=document.createElement('div');d.className='fcard';
-    d.innerHTML=`${f.thumb?`<img src="${f.thumb}" referrerpolicy="no-referrer" onerror="this.style.display='none'">`:''}
-      <div class="fmeta"><div class="ftype">DRAWING</div><a href="${f.link}" target="_blank">${esc(f.name)}</a></div>`;
+    d.innerHTML=`${f.thumb?`<img src="${esc(safeUrl(f.thumb,true))}" referrerpolicy="no-referrer" onerror="this.style.display='none'">`:''}
+      <div class="fmeta"><div class="ftype">DRAWING</div><a href="${esc(safeUrl(f.link))}" target="_blank" rel="noopener noreferrer">${esc(f.name)}</a></div>`;
     g.appendChild(d);
   });
 }
@@ -3023,49 +3270,40 @@ async function uploadDrawings(p){
 }
 
 async function saveProject(p){
-  // did somebody else write this project while we had it open?
-  let mt=null;
-  try{ mt=await remoteMtime(p.jsonId); }catch(e){ /* offline check — just save */ }
-  if(mt && p.mtime && mt!==p.mtime){
-    try{
-      const theirs=await fetchProjectData(p.jsonId);
-      const base=p.base||theirs;
-      p.data=mergeProject(base,p.data,theirs);
-      toast('Merged with changes from another user');
-    }catch(e){
-      console.warn('[LABCORE] merge failed, keeping local copy',e);
-    }
-  }
-  await writeJson('project.json',p.folderId,p.data,p.jsonId);
-  p.base=JSON.parse(JSON.stringify(p.data));
-  try{ p.mtime=await remoteMtime(p.jsonId); }catch(e){ p.mtime=null; }
+  const base=cloneData(p.base),ours=cloneData(p.data);
+  pendingWrites++;
+  const run=(projectWrites.get(p)||Promise.resolve()).catch(()=>{}).then(()=>commitProject(p,base,ours));
+  projectWrites.set(p,run);
+  try{return await run;}finally{pendingWrites--;if(projectWrites.get(p)===run)projectWrites.delete(p);}
 }
 
 /* ---- live refresh: pick up other people's edits while a project is open ---- */
-const PROJ_POLL=15000;
+const PROJ_POLL=60000;
 let pollTimer=null;
 function startProjectPolling(){
   clearInterval(pollTimer);
   pollTimer=setInterval(checkProjectFreshness,PROJ_POLL);
 }
+let pollingBusy=false,pollFailures=0,nextPollAt=0;
 async function checkProjectFreshness(){
-  if(!accessToken)return;
   const p=projects[selectedProjectIndex];
-  if(!p)return;
-  // never interrupt someone mid-edit or mid-save
-  if(laserEditing||detailsEditing||savingBusy)return;
-  if(document.getElementById('modalBg').classList.contains('open'))return;
+  const blocked=()=>!p||projects[selectedProjectIndex]!==p||activeNav!=='projects'||!document.getElementById('sampleArea')||
+    laserEditing||detailsEditing||savingBusy||pendingWrites||failedDrafts.has(p.jsonId)||
+    document.getElementById('modalBg').classList.contains('open')||
+    ['INPUT','TEXTAREA','SELECT'].includes(document.activeElement?.tagName)||!same(p.data,p.base);
+  if(!accessToken||pollingBusy||document.hidden||navigator.onLine===false||Date.now()<nextPollAt||blocked())return;
+  pollingBusy=true;
   try{
-    const mt=await remoteMtime(p.jsonId);
-    if(!mt||mt===p.mtime)return;
-    const theirs=await fetchProjectData(p.jsonId);
-    // nothing unsaved locally -> just take their version
-    p.data=same(p.data,p.base)?theirs:mergeProject(p.base||theirs,p.data,theirs);
-    p.base=JSON.parse(JSON.stringify(p.data));
-    p.mtime=mt;
-    renderProject();
-    toast('Project updated by another user');
-  }catch(e){ /* transient network issues are not worth reporting */ }
+    const mt=await remoteMtime(p.jsonId);pollFailures=0;nextPollAt=0;if(!mt||mt===p.mtime)return;
+    const remote=await readProjectVersion(p.jsonId);if(blocked())return;
+    p.data=remote.data;p.base=cloneData(remote.data);p.mtime=remote.mtime;
+    renderProject();toast('Project updated by another user');
+  }catch(e){
+    pollFailures=Math.min(pollFailures+1,4);
+    nextPollAt=Date.now()+Math.min(900000,PROJ_POLL*2**pollFailures)+Math.floor(Math.random()*5000);
+    console.warn('[LABCORE] refresh deferred',e);
+  }
+  finally{pollingBusy=false;}
 }
 
 /* ---------- Samples ---------- */
@@ -3155,7 +3393,7 @@ function recipeTableHtml(rec){
       <thead><tr><th>#</th><th>Step</th><th>Time</th><th>US</th><th>Temp</th><th>Notes</th></tr></thead>
       <tbody>
         ${rec.rows.map((r,i)=>`<tr>
-          <td class="num">${r.index||i+1}</td>
+          <td class="num">${i+1}</td>
           <td>${esc(r.step||'')}</td>
           <td>${esc(r.time?String(r.time)+(r.unit?' '+unitShort(r.unit):''):'')}</td>
           <td class="num">${r.us?'<span class="us-yes">US</span>':''}</td>
@@ -3525,9 +3763,11 @@ async function saveRecipe(p,si,alsoPrint){
       await saveProject(p); await writeParamsExcel(p);
     });
   }catch(e){ toast('Could not save: '+e.message,true); return; }
+  si=p.data.samples.findIndex(x=>x.id===sm.id);
+  if(si<0){toast('Sample no longer exists',true);return;}
   if(alsoPrint){
-    try{ await withSaving('Printing…', ()=>printSampleRecipe(p,si,!!rec.big));
-         toast('Recipe saved and printed'); }
+    try{ const result=await withSaving('Printing…', ()=>printSampleRecipe(p,si,!!rec.big));
+         toast(result.warning||'Recipe saved and sent to printer',!!result.warning); }
     catch(e){ toast('Saved, but printing failed: '+e.message,true); }
   }else{ toast('Recipe saved to Drive · spreadsheet updated'); }
   showSample(p,si); renderSamples(p);
@@ -3578,6 +3818,7 @@ async function pickRecipe(p,si,queryOverride){
             await saveProject(p); await writeParamsExcel(p);
           });
         }catch(e){ toast('Could not save: '+e.message,true); return; }
+        si=p.data.samples.findIndex(x=>x.id===sm.id);if(si<0)return;
         toast('Recipe attached to '+sm.label);
         showSample(p,si); renderSamples(p);
       };
@@ -3603,6 +3844,7 @@ function detachRecipe(p,si){
           await saveProject(p); await writeParamsExcel(p);
         });
       }catch(e){ toast('Could not save: '+e.message,true); return; }
+      si=p.data.samples.findIndex(x=>x.id===sm.id);if(si<0)return;
       toast('Recipe removed'); showSample(p,si); renderSamples(p);
     });
 }
@@ -3625,6 +3867,7 @@ async function saveDetailsEdit(p,si){
     });
   }catch(e){ toast('Could not save: '+e.message,true); return; }
   detailsEditing=false;
+  si=p.data.samples.findIndex(x=>x.id===sm.id);if(si<0)return;
   toast('Sample saved to Drive'); renderSamples(p); showSample(p,si);
 }
 /* the header block at the top of the sample popup */
@@ -3702,7 +3945,7 @@ function startLaserInline(p,si,back){ laserEditing=true;  reopen(p,si,back); }
 function cancelLaserInline(p,si,back){ laserEditing=false; reopen(p,si,back); }
 async function saveLaserInline(p,si,back){
   const sm=p.data.samples[si];
-  sm.laser={
+  const laser={
     wavelength:v('l_wavelength'),wavelength_u:v('l_wavelength_u'),
     power:v('l_power'),power_u:v('l_power_u'),
     energy:v('l_energy'),energy_u:v('l_energy_u'),
@@ -3713,12 +3956,14 @@ async function saveLaserInline(p,si,back){
     hatch:v('l_hatch'),hatch_u:v('l_hatch_u'),
     passes:v('l_passes'),source:v('l_source'),notes:v('l_notes')};
   try{
+    sm.laser=validateLaser(laser);
     await withSaving('Saving laser parameters…', async()=>{
       await saveProject(p); await writeParamsExcel(p);
     });
     toast('Laser parameters saved to Drive');
   }catch(e){ toast('Could not save: '+e.message,true); return; }
   laserEditing=false;
+  si=p.data.samples.findIndex(x=>x.id===sm.id);if(si<0)return;
   renderSamples(p);
   reopen(p,si,back);
 }
@@ -3740,9 +3985,9 @@ function showSample(p,si){
     <div class="gallery" style="margin-top:4px">
       ${files.map(f=>`
         <div class="fcard">
-          ${f.thumb?`<img src="${f.thumb}" referrerpolicy="no-referrer" onerror="this.style.display='none'">`:''}
+          ${f.thumb?`<img src="${esc(safeUrl(f.thumb,true))}" referrerpolicy="no-referrer" onerror="this.style.display='none'">`:''}
           <div class="fmeta"><div class="ftype">${esc((f.type||'file').toUpperCase())}</div>
-          <a href="${f.link}" target="_blank">${esc(f.name)}</a></div>
+          <a href="${esc(safeUrl(f.link))}" target="_blank" rel="noopener noreferrer">${esc(f.name)}</a></div>
         </div>`).join('')}
     </div>`
     :'<div class="empty-note" style="padding:14px">No photos or files uploaded for this sample yet.</div>';
@@ -3786,11 +4031,9 @@ function showSample(p,si){
 async function openSampleFolder(p,si){
   const sm=p.data.samples[si];
   try{
-    let fid=sm.folderId;
-    if(!fid){
-      fid=await ensureSubfolder('Sample_'+sm.label.replace(/[^\w-]+/g,'_'),p.folderId);
-      sm.folderId=fid; await saveProject(p);
-    }
+    const old=sm.folderId;
+    const fid=await sampleFolder(p,sm,true);
+    if(old!==fid)await saveProject(p);
     window.open('https://drive.google.com/drive/folders/'+fid,'_blank');
   }catch(e){ toast('Could not open folder: '+(e.message||e),true); }
 }
@@ -3828,7 +4071,8 @@ function showRecipe(p,si){
      </div>`,true);
 }
 async function printRecipeNow(p,si){
-  try{ await printSampleRecipe(p,si,false); toast('Printed'); showRecipe(p,si); }
+  const sampleId=p.data.samples[si].id;
+  try{ const result=await printSampleRecipe(p,si,false); si=p.data.samples.findIndex(x=>x.id===sampleId);if(si>=0)showRecipe(p,si);toast(result.warning||'Sent to printer',!!result.warning); }
   catch(e){ toast(e.message,true); }
 }
 
@@ -3881,9 +4125,9 @@ function renderGallery(p,si){
   s.files.forEach(f=>{
     const d=document.createElement('div');d.className='fcard';
     const isImg=f.type==='photo';
-    d.innerHTML=`${isImg&&f.thumb?`<img src="${f.thumb}" referrerpolicy="no-referrer" onerror="this.style.display='none'">`:''}
-      <div class="fmeta"><div class="ftype">${f.type.toUpperCase()}</div>
-      <a href="${f.link}" target="_blank">${esc(f.name)}</a></div>`;
+    d.innerHTML=`${isImg&&f.thumb?`<img src="${esc(safeUrl(f.thumb,true))}" referrerpolicy="no-referrer" onerror="this.style.display='none'">`:''}
+      <div class="fmeta"><div class="ftype">${esc(textValue(f.type).toUpperCase())}</div>
+      <a href="${esc(safeUrl(f.link))}" target="_blank" rel="noopener noreferrer">${esc(f.name)}</a></div>`;
     g.appendChild(d);
   });
 }
@@ -3897,10 +4141,9 @@ async function doUpload(p,si){
   setBusy(true,'Uploading to Drive…');
   try{
     // files grouped into a subfolder named after the sample, e.g. ProjectFolder/S-01/
-    const sampleFolder=await ensureSubfolder('Sample_'+s.label.replace(/[^\w-]+/g,'_'),p.folderId);
-    s.folderId=sampleFolder;
+    const targetFolder=await sampleFolder(p,s,true);
     for(const file of files){
-      const r=await uploadFile(file,sampleFolder);
+      const r=await uploadFile(file,targetFolder);
       s.files.push({id:r.id,name:r.name,type,link:r.webViewLink,thumb:r.thumbnailLink});
     }
     await saveProject(p);
@@ -3948,13 +4191,13 @@ function newSampleForm(p){
     if(p.data.samples.some(x=>(x.label||'').toLowerCase()===label.toLowerCase())){
       err.textContent='A sample with that label already exists in this project.';
       err.classList.add('show');return;}
-    const btn=document.getElementById('ns_save');btn.innerHTML='<span class="loader"></span> Adding…';
+    const btn=document.getElementById('ns_save');if(btn.disabled)return;btn.disabled=true;btn.innerHTML='<span class="loader"></span> Adding…';
     try{
-      const sm={label,material:document.getElementById('ns_material').value.trim(),
+      const sm={id:newId(),label,material:document.getElementById('ns_material').value.trim(),
                 laser:{},files:[],created:new Date().toISOString()};
       const files=staged('nsFiles');
       if(files.length){
-        const folder=await ensureSubfolder('Sample_'+label.replace(/[^\w-]+/g,'_'),p.folderId);
+        const folder=await sampleFolder(p,sm,true);
         sm.folderId=folder;
         for(const f of files){
           const r=await uploadFile(f,folder);
@@ -3968,7 +4211,7 @@ function newSampleForm(p){
       toast('Sample '+label+' added');
     }catch(e){
       err.textContent='Could not add the sample: '+(e.message||e);
-      err.classList.add('show'); btn.textContent='Add sample';
+      err.classList.add('show'); btn.textContent='Add sample';btn.disabled=false;
     }
   };
 }
@@ -4012,6 +4255,7 @@ function openSampleForm(p,si){
     const label=document.getElementById('s_label').value.trim();
     if(!label){toast('Label required',true);return;}
     const obj={
+      ...(editing?s:{}),id:editing?s.id:newId(),
       label,material:document.getElementById('s_material').value,
       laser:{
         wavelength:v('l_wavelength'),wavelength_u:v('l_wavelength_u'),
@@ -4031,9 +4275,10 @@ function openSampleForm(p,si){
     };
     const btn=document.getElementById('saveS');btn.innerHTML='<span class="loader"></span>';
     try{
+      obj.laser=validateLaser(obj.laser);
+      if(p.data.samples.some((x,i)=>i!==si&&x.label.toLowerCase()===label.toLowerCase()))throw new Error('Another sample uses that label');
       if(editing)p.data.samples[si]=obj;else p.data.samples.push(obj);
-      await writeParamsExcel(p);            // refresh the per-project .xlsx
-      await saveProject(p);renderProject();toast('Sample saved · spreadsheet updated');
+      await saveProject(p);await writeParamsExcel(p);renderProject();toast('Sample saved · spreadsheet updated');
     }catch(e){toast('Error: '+e.message,true);btn.textContent='Save';}
   };
 }
