@@ -329,6 +329,7 @@
   .panel-head h3{margin:0;font-size:13px;letter-spacing:1.4px;text-transform:uppercase;
     display:flex;align-items:center;gap:8px}
 
+  .linesbox{margin-top:14px;padding:12px 14px;border:1px dashed var(--line);border-radius:10px;background:var(--panel2)}
   .chk{display:inline-flex;align-items:center;gap:5px;font-size:12px;text-transform:none;letter-spacing:0;
     margin:0;color:var(--ink);white-space:nowrap}
   .chk input{width:auto;margin:0}
@@ -520,6 +521,12 @@
     transform:translateX(-50%) rotate(45deg);border-radius:2px;z-index:1}
   .tl-ms.done{background:#12b76a;border-color:#12b76a}
   .tl-ms.over{border-color:#b42318;background:#fdeceb}
+  .tl-ms{cursor:pointer;transition:transform .12s}
+  .tl-ms:hover{transform:translateX(-50%) rotate(45deg) scale(1.35);z-index:3}
+  .tl-ms.hasfiles::after{content:'';position:absolute;right:-5px;bottom:-5px;width:6px;height:6px;border-radius:50%;background:var(--acc)}
+  .tag.ms{background:#111827;color:#fff}
+  .msinfo{display:grid;grid-template-columns:110px 1fr;gap:6px 14px;font-size:13px;margin-bottom:14px}
+  .msinfo b{color:var(--mute);font-weight:600;font-size:11px;letter-spacing:.8px;text-transform:uppercase;align-self:center}
   .tl-today{position:absolute;top:0;bottom:0;width:2px;background:var(--warn);z-index:1;opacity:.8}
 
   /* ---- WHO IS IN ---- */
@@ -693,7 +700,7 @@
 /* ============================================================
    CONFIG  —  EDIT THESE TWO VALUES (see instructions below)
    ============================================================ */
-const LABCORE_VERSION = '2026-11-04 h';   // bump on every release
+const LABCORE_VERSION = '2026-11-04 j';   // bump on every release
 /* The one LABCORE_DATA folder everyone uses. Paste its Drive folder ID here
    (from the folder's URL: drive.google.com/drive/folders/<THIS PART>).
    When set, LabCore never searches for or creates a folder — it uses this
@@ -1080,6 +1087,20 @@ async function driveAlive(fileId){
 async function renameDriveFolder(fileId,newName){
   await gapi.client.drive.files.update({fileId,resource:{name:newName}});
 }
+/* Parent folder for a sample: the group's subfolder when the sample has an
+   explicit group, otherwise the project folder itself. Created if missing. */
+async function sampleParentFolder(p,sm){
+  const g=(sm.group||'').trim();
+  if(!g)return p.folderId;
+  return await ensureSubfolder(sampleFolderName(g),p.folderId);
+}
+/* move a Drive file/folder to another parent (used when a sample changes group) */
+async function moveDriveItem(fileId,newParentId){
+  const r=await gapi.client.drive.files.get({fileId,fields:'parents'});
+  const old=(r.result.parents||[]).join(',');
+  if(old===newParentId)return;
+  await gapi.client.drive.files.update({fileId,addParents:newParentId,removeParents:old,fields:'id,parents'});
+}
 
 /* find a folder by name under a parent WITHOUT creating it (null if absent) */
 async function findSubfolder(name,parentId){
@@ -1122,7 +1143,12 @@ async function locateSampleFolder(p,sm){
     return null;                                   // it was deleted in Drive
   }
   const want=sampleFolderName(sm.label);
-  let fid=await findSubfolder(want,p.folderId);
+  let fid=null;
+  if((sm.group||'').trim()){
+    const gf=await findSubfolder(sampleFolderName(sm.group),p.folderId);
+    if(gf)fid=await findSubfolder(want,gf);
+  }
+  if(!fid)fid=await findSubfolder(want,p.folderId);
   if(fid)return fid;
   const legacy='Sample_'+String(sm.label||'').replace(/[^\w-]+/g,'_');
   fid=await findSubfolder(legacy,p.folderId);
@@ -1292,10 +1318,22 @@ async function writeParamsExcel(p){
     ['Pulse duration', s=>fmt(s.laser?.pulse,s.laser?.pulse_u)],
     ['Scan speed', s=>fmt(s.laser?.speed,s.laser?.speed_u)],
     ['Spot size', s=>fmt(s.laser?.spot,s.laser?.spot_u)],
-    ['Hatch / line spacing', s=>fmt(s.laser?.hatch,s.laser?.hatch_u)],
+    ['Hatch spacing', s=>fmt(s.laser?.hatch,s.laser?.hatch_u)],
     ['Passes / repetitions', s=>fmt(s.laser?.passes)],
     ['Source / model', s=>fmt(s.laser?.source)],
     ['Notes', s=>fmt(s.laser?.notes)],
+    ['— LINES —', s=>s.laser?.lines?'yes':''],
+    ['Lines: wavelength', s=>fmt(s.laser?.lines?.wavelength,s.laser?.lines?.wavelength_u)],
+    ['Lines: average power', s=>fmt(s.laser?.lines?.power,s.laser?.lines?.power_u)],
+    ['Lines: pulse energy', s=>fmt(s.laser?.lines?.energy,s.laser?.lines?.energy_u)],
+    ['Lines: frequency', s=>fmt(s.laser?.lines?.frequency,s.laser?.lines?.frequency_u)],
+    ['Lines: pulse duration', s=>fmt(s.laser?.lines?.pulse,s.laser?.lines?.pulse_u)],
+    ['Lines: scan speed', s=>fmt(s.laser?.lines?.speed,s.laser?.lines?.speed_u)],
+    ['Lines: spot size', s=>fmt(s.laser?.lines?.spot,s.laser?.lines?.spot_u)],
+    ['Lines: line spacing', s=>fmt(s.laser?.lines?.spacing,s.laser?.lines?.spacing_u)],
+    ['Lines: passes', s=>fmt(s.laser?.lines?.passes)],
+    ['Lines: source / model', s=>fmt(s.laser?.lines?.source)],
+    ['Lines: notes', s=>fmt(s.laser?.lines?.notes)],
   ];
 
   const BANNER='GENERATED BY LABCORE — DO NOT EDIT. This file is rewritten automatically '+
@@ -1465,6 +1503,11 @@ const unionById=(a,b)=>{
   (b||[]).forEach(x=>{ if(!out.some(y=>y.id===x.id))out.push(x); });
   return out;
 };
+function mergeMilestone(b,o,t){
+  return {...t,...o,
+    done:pick(b.done,o.done,t.done), doneAt:pick(b.doneAt,o.doneAt,t.doneAt),
+    folderId:o.folderId||t.folderId, files:unionById(t.files,o.files)};
+}
 function mergeTask(b,o,t){
   return {text:o.text||t.text, done:pick(b.done,o.done,t.done)};
 }
@@ -1486,7 +1529,8 @@ function mergeProject(base,ours,theirs){
   ['name','status','priority','deadline','description','start'].forEach(k=>{
     out[k]=pick(base[k],ours[k],theirs[k]);
   });
-  out.milestones=pick(base.milestones||[],ours.milestones||[],theirs.milestones||[]);
+  out.milestones=mergeObjects(base.milestones||[],ours.milestones||[],theirs.milestones||[],
+                           m=>String(m.date||'')+'|'+String(m.text||'').toLowerCase(),mergeMilestone);
   out.people =mergeStrings(base.people||[],ours.people||[],theirs.people||[],x=>String(x).toLowerCase());
   out.tasks  =mergeObjects(base.tasks||[],ours.tasks||[],theirs.tasks||[],
                            t=>String(t.text||'').toLowerCase(),mergeTask);
@@ -2383,7 +2427,7 @@ function renderTimeline(){
       let start=d.start?new Date(d.start+'T00:00:00'):(d.created?new Date(d.created):null);
       if(start)start.setHours(0,0,0,0);
       if(start&&end&&start>end)start=new Date(end);
-      return {...x,start,end,ms:(d.milestones||[]).map(m=>({...m,dt:new Date(m.date+'T00:00:00')}))};
+      return {...x,start,end,ms:(d.milestones||[]).map((m,mi)=>({...m,mi,dt:new Date(m.date+'T00:00:00')}))};
     })
     .filter(x=>x.end||x.ms.length)
     .filter(x=>{ const a=x.start||x.end, b=x.end||x.start; return !(b<from||a>to) || x.ms.some(m=>m.dt>=from&&m.dt<to); })
@@ -2415,12 +2459,14 @@ function renderTimeline(){
         title="${esc(d.name)} · ${s.toLocaleDateString()} → ${e.toLocaleDateString()}">
         <span>${esc(d.name)}</span></div>`;
     const dia=ms.filter(m=>m.dt>=from&&m.dt<to).map(m=>
-      `<div class="tl-ms${m.done?' done':''}${(!m.done&&m.dt<today)?' over':''}" style="left:${pct(m.dt)}%" title="${esc(m.date)} · ${esc(m.text)}"></div>`).join('');
+      `<div class="tl-ms${m.done?' done':''}${(!m.done&&m.dt<today)?' over':''}${(m.files||[]).length?' hasfiles':''}" style="left:${pct(m.dt)}%"
+        title="${esc(m.date)} · ${esc(m.text)}${m.done?' · done':''}${(m.files||[]).length?' · '+(m.files||[]).length+' file(s)':''} — click to open"
+        onclick="openMilestone(${i},${m.mi})"></div>`).join('');
     const nextMs=ms.filter(m=>!m.done&&m.dt>=today).sort((a,b)=>a.dt-b.dt)[0];
     return `<div class="tl-row">
       <div class="tl-label" onclick="selectedProjectIndex=${i};activeNav='projects';renderNav();renderProject()">
         <b>${esc(d.name)}</b>
-        <small>${done?'✓ done':(end?deadlineInfo(d.deadline).label:'no deadline')}${nextMs?' · ◆ '+esc(nextMs.text)+' '+esc(nextMs.date):''}</small>
+        <small>${done?'✓ done':(end?deadlineInfo(d.deadline).label:'no deadline')}${nextMs?` · <span style="cursor:pointer;text-decoration:underline dotted" onclick="event.stopPropagation();openMilestone(${i},${nextMs.mi})">◆ ${esc(nextMs.text)} ${esc(nextMs.date)}</span>`:''}</small>
       </div>
       <div class="tl-track">${bar}${dia}${todayPct!==null?`<div class="tl-today" style="left:${todayPct}%"></div>`:''}</div>
     </div>`;}).join('')
@@ -2444,7 +2490,7 @@ function renderTimeline(){
       <span><i style="background:#d92d20"></i> urgent</span><span><i style="background:#f79009"></i> high</span>
       <span><i style="background:#2f6df6"></i> medium</span><span><i style="background:#98a2b3"></i> low</span>
       <span><i style="background:#12b76a"></i> done</span>
-      <span>◆ milestone (report due, samples to send…)</span>
+      <span>◆ milestone — click it to mark done or attach files</span>
       <span><i style="background:var(--warn);width:2px"></i> today</span>
     </div>
     <div class="tl-wrap" style="--wk:${tlWeeks}">
@@ -3502,7 +3548,8 @@ function epRenderMs(){
     row.innerHTML=`<label style="display:flex;align-items:center;gap:9px;margin:0;cursor:pointer;text-transform:none;letter-spacing:0;color:var(--ink);font-size:13px;flex:1">
         <input type="checkbox" ${m.done?'checked':''} style="width:auto">
         <span class="mono" style="color:var(--mute);font-size:12px">${esc(m.date)}</span>
-        <span style="${m.done?'text-decoration:line-through;color:var(--mute)':''}">${esc(m.text)}</span></label>
+        <span style="${m.done?'text-decoration:line-through;color:var(--mute)':''}">${esc(m.text)}</span>
+        ${(m.files||[]).length?`<span class="mono" style="color:var(--mute);font-size:11px">📎 ${(m.files||[]).length}</span>`:''}</label>
       <button class="taskdel">✕</button>`;
     row.querySelector('input').onchange=e=>{m.done=e.target.checked;epRenderMs();};
     row.querySelector('.taskdel').onclick=()=>{ms.splice(i,1);epRenderMs();};
@@ -3883,7 +3930,12 @@ function renderSamples(p){
 /* does a parameter group have any values filled in? */
 function hasValues(o){
   if(!o)return false;
-  return Object.keys(o).some(k=>!k.endsWith('_u')&&o[k]!==''&&o[k]!==undefined&&o[k]!==null);
+  return Object.keys(o).some(k=>{
+    if(k.endsWith('_u'))return false;
+    const v=o[k];
+    if(v&&typeof v==='object')return hasValues(v);
+    return v!==''&&v!==undefined&&v!==null;
+  });
 }
 
 /* rows for a parameter group, reused by both modals */
@@ -3894,7 +3946,7 @@ function paramRows(sm,which){
     ['Wavelength',s.wavelength,s.wavelength_u],['Average power',s.power,s.power_u],
     ['Pulse energy',s.energy,s.energy_u],['Frequency / rep. rate',s.frequency,s.frequency_u],
     ['Pulse duration',s.pulse,s.pulse_u],['Scan speed',s.speed,s.speed_u],
-    ['Spot size',s.spot,s.spot_u],['Hatch / line spacing',s.hatch,s.hatch_u],
+    ['Spot size',s.spot,s.spot_u],['Hatch spacing',s.hatch,s.hatch_u],
     ['Passes / repetitions',s.passes],['Source / model',s.source],['Notes',s.notes]
   ]:[
     ['Solution / electrolyte',s.solution],['Concentration',s.concentration,s.concentration_u],
@@ -3902,7 +3954,17 @@ function paramRows(sm,which){
     ['Current density',s.current,s.current_u],['Duration',s.duration,s.duration_u],
     ['Process',s.process],['Notes',s.notes]
   ];
-  return rows.map(([k,v,u])=>kvu(k,v,u)).join('');
+  let html=rows.map(([k,v,u])=>kvu(k,v,u)).join('');
+  if(laser&&s.lines){
+    const x=s.lines;
+    html+=`<div class="row" style="border:none;padding-top:12px"><span class="k" style="font-weight:800;color:var(--ink);letter-spacing:.8px;font-size:11px">LINES</span></div>`+
+      [['Wavelength',x.wavelength,x.wavelength_u],['Average power',x.power,x.power_u],['Pulse energy',x.energy,x.energy_u],
+       ['Frequency / rep. rate',x.frequency,x.frequency_u],['Pulse duration',x.pulse,x.pulse_u],
+       ['Scan speed',x.speed,x.speed_u],['Spot size',x.spot,x.spot_u],['Line spacing',x.spacing,x.spacing_u],
+       ['Passes / repetitions',x.passes],['Source / model',x.source],['Notes',x.notes]]
+      .map(([k,v,u])=>kvu(k,v,u)).join('');
+  }
+  return html;
 }
 
 /* ---------- CHEMICAL RECIPE (printer format, unchanged) ----------
@@ -4385,16 +4447,18 @@ async function saveDetailsEdit(p,si){
   if(!label){toast('Sample name cannot be empty',true);return;}
   if(p.data.samples.some((x,i)=>i!==si&&(x.label||'').toLowerCase()===label.toLowerCase())){
     toast('Another sample already uses that name',true);return;}
-  const oldLabel=sm.label;
+  const oldLabel=sm.label, oldGroup=(sm.group||'').trim();
   sm.label=label;
   sm.material=document.getElementById('sd_material').value.trim();
   sm.group=(document.getElementById('sd_group')||{value:''}).value.trim();
   try{
     await withSaving('Saving sample…', async()=>{
-      if(oldLabel!==label){
-        // keep the Drive folder named after the sample
-        const fid=await locateSampleFolder(p,{label:oldLabel,folderId:sm.folderId});
-        if(fid){ await renameDriveFolder(fid,sampleFolderName(label)); sm.folderId=fid; }
+      const fid=await locateSampleFolder(p,{label:oldLabel,group:oldGroup,folderId:sm.folderId});
+      if(fid){
+        sm.folderId=fid;
+        if(oldLabel!==label)await renameDriveFolder(fid,sampleFolderName(label));
+        if(oldGroup.toLowerCase()!==sm.group.toLowerCase())
+          await moveDriveItem(fid,await sampleParentFolder(p,sm));   // into / out of the group folder
       }
       await saveProject(p); await writeParamsExcel(p);
     });
@@ -4504,12 +4568,43 @@ function laserEditHtml(sm){
       <div>
         ${prow('Scan speed','l_speed',L.speed,'l_speed_u',L.speed_u,['mm/s','m/s'],'mm/s')}
         ${prow('Spot size','l_spot',L.spot,'l_spot_u',L.spot_u,['µm','mm'],'µm')}
-        ${prow('Hatch / line spacing','l_hatch',L.hatch,'l_hatch_u',L.hatch_u,['µm','mm'],'µm')}
+        ${prow('Hatch spacing','l_hatch',L.hatch,'l_hatch_u',L.hatch_u,['µm','mm'],'µm')}
         <div class="field"><label>Passes / repetitions</label><input id="l_passes" value="${esc(L.passes||'')}"></div>
         <div class="field"><label>Source / model</label><input id="l_source" value="${esc(L.source||'')}"></div>
       </div>
     </div>
-    <div class="field"><label>Notes</label><textarea id="l_notes" rows="2">${esc(L.notes||'')}</textarea></div>`;
+    <div class="field"><label>Notes</label><textarea id="l_notes" rows="2">${esc(L.notes||'')}</textarea></div>
+    ${laserLinesEditHtml(L.lines)}`;
+}
+/* Optional second parameter set for LINES (contours / single tracks) when they
+   differ from the hatch. Hidden until switched on. Shares wavelength, pulse
+   duration and source with the main set — those are properties of the laser. */
+function laserLinesEditHtml(ln){
+  const on=!!ln;
+  const x=ln||{};
+  return `<div class="linesbox">
+    <label class="chk" style="font-size:13px;margin-bottom:${on?'10px':'0'}">
+      <input type="checkbox" id="l_lines_on" ${on?'checked':''} onchange="document.getElementById('l_lines').style.display=this.checked?'':'none'">
+      Separate parameters for <b>lines</b> (different settings, or a different laser system)</label>
+    <div id="l_lines" style="${on?'':'display:none'}">
+      <div class="subgrid" style="gap:0 22px">
+        <div>
+          ${prow('Wavelength','ln_wavelength',x.wavelength,'ln_wavelength_u',x.wavelength_u,['nm','µm'],'nm')}
+          ${prow('Average power','ln_power',x.power,'ln_power_u',x.power_u,['mW','W'],'W')}
+          ${prow('Pulse energy','ln_energy',x.energy,'ln_energy_u',x.energy_u,['nJ','µJ','mJ'],'µJ')}
+          ${prow('Frequency / rep. rate','ln_freq',x.frequency,'ln_freq_u',x.frequency_u,['Hz','kHz','MHz'],'kHz')}
+          ${prow('Pulse duration','ln_pulse',x.pulse,'ln_pulse_u',x.pulse_u,['fs','ps','ns','µs'],'ns')}
+        </div>
+        <div>
+          ${prow('Scan speed','ln_speed',x.speed,'ln_speed_u',x.speed_u,['mm/s','m/s'],'mm/s')}
+          ${prow('Spot size','ln_spot',x.spot,'ln_spot_u',x.spot_u,['µm','mm'],'µm')}
+          ${prow('Line spacing','ln_spacing',x.spacing,'ln_spacing_u',x.spacing_u,['µm','mm'],'µm')}
+          <div class="field"><label>Passes / repetitions</label><input id="ln_passes" value="${esc(x.passes||'')}"></div>
+          <div class="field"><label>Source / model</label><input id="ln_source" value="${esc(x.source||'')}"></div>
+        </div>
+      </div>
+      <div class="field" style="margin-bottom:0"><label>Notes (lines)</label><textarea id="ln_notes" rows="2">${esc(x.notes||'')}</textarea></div>
+    </div></div>`;
 }
 /* buttons shown above the laser block, depending on mode */
 function laserBtns(si,back){
@@ -4538,6 +4633,14 @@ async function saveLaserInline(p,si,back){
     spot:v('l_spot'),spot_u:v('l_spot_u'),
     hatch:v('l_hatch'),hatch_u:v('l_hatch_u'),
     passes:v('l_passes'),source:v('l_source'),notes:v('l_notes')};
+  const lnOn=document.getElementById('l_lines_on');
+  if(lnOn&&lnOn.checked){
+    sm.laser.lines={wavelength:v('ln_wavelength'),wavelength_u:v('ln_wavelength_u'),
+      power:v('ln_power'),power_u:v('ln_power_u'),energy:v('ln_energy'),energy_u:v('ln_energy_u'),
+      frequency:v('ln_freq'),frequency_u:v('ln_freq_u'),pulse:v('ln_pulse'),pulse_u:v('ln_pulse_u'),
+      speed:v('ln_speed'),speed_u:v('ln_speed_u'),spot:v('ln_spot'),spot_u:v('ln_spot_u'),
+      spacing:v('ln_spacing'),spacing_u:v('ln_spacing_u'),passes:v('ln_passes'),source:v('ln_source'),notes:v('ln_notes')};
+  }
   try{
     await withSaving('Saving laser parameters…', async()=>{
       await saveProject(p); await writeParamsExcel(p);
@@ -4615,9 +4718,146 @@ async function openSampleFolder(p,si){
   try{
     let fid=sm.folderId;
     if(!fid){
-      fid=await ensureSubfolder(sampleFolderName(sm.label),p.folderId);
+      fid=await ensureSubfolder(sampleFolderName(sm.label),await sampleParentFolder(p,sm));
       sm.folderId=fid; await saveProject(p);
     }
+    window.open('https://drive.google.com/drive/folders/'+fid,'_blank');
+  }catch(e){ toast('Could not open folder: '+(e.message||e),true); }
+}
+
+/* ================= MILESTONE POPUP =================
+   Click a ◆ on the timeline: mark it done / not done, attach files, open
+   its folder. Files live in  PRJ_<name>/Milestones/<date> <text>/  and
+   Drive stays the source of truth (deleting there removes them here).  */
+function msFolderName(m){ return sampleFolderName((m.date||'')+' '+(m.text||'')).slice(0,120); }
+async function locateMilestoneFolder(p,m){
+  if(m.folderId){
+    if(await driveAlive(m.folderId))return m.folderId;
+    m.folderId=''; return null;                     // deleted in Drive
+  }
+  const root=await findSubfolder('Milestones',p.folderId);
+  if(!root)return null;
+  return await findSubfolder(msFolderName(m),root);
+}
+async function ensureMilestoneFolder(p,m){
+  let fid=await locateMilestoneFolder(p,m);
+  if(!fid){
+    const root=await ensureSubfolder('Milestones',p.folderId);
+    fid=await ensureSubfolder(msFolderName(m),root);
+  }
+  m.folderId=fid; return fid;
+}
+async function syncMilestoneFiles(p,m,save){
+  try{
+    const fid=await locateMilestoneFolder(p,m);
+    const live=fid?await listFolderFiles(fid):[];
+    if(fid)m.folderId=fid;
+    const before=JSON.stringify((m.files||[]).map(f=>f.id).sort());
+    m.files=live.map(f=>({id:f.id,name:f.name,link:f.webViewLink,thumb:f.thumbnailLink,type:inferType(f)}));
+    const after=JSON.stringify(m.files.map(f=>f.id).sort());
+    const changed=before!==after;
+    if(changed&&save)await saveProject(p);
+    return changed;
+  }catch(e){ console.warn('[LABCORE] milestone sync failed',e); return false; }
+}
+function msKey(pi,mi){ return pi+'_'+mi; }
+function openMilestone(pi,mi){
+  const p=projects[pi]; const m=p&&(p.data.milestones||[])[mi];
+  if(!m){toast('Milestone not found',true);return;}
+  selectedProjectIndex=pi;
+  const k=msKey(pi,mi);
+  openModal(`<span class="tag ms">MILESTONE</span> ${esc(m.text)}`,`
+    <div id="ms_head_${k}"></div>
+    <div style="display:flex;gap:9px;flex-wrap:wrap;margin-bottom:18px" id="ms_btns_${k}"></div>
+    <h3 style="font-size:12px;letter-spacing:1.3px;text-transform:uppercase;margin:0 0 8px">
+      <span class="tag file">FILES</span> attached to this milestone</h3>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+      <input type="file" id="msIn_${k}" multiple style="flex:1;min-width:200px">
+      <button class="btn btn-blue" id="msUp_${k}">Upload</button>
+    </div>
+    <div id="msStage_${k}" class="stage-list"></div>
+    <div class="gallery" id="msGal_${k}" style="margin-top:14px"></div>
+    <div class="empty-note" style="padding:8px 0 0;font-size:12px">Files are stored in the project folder under <code>Milestones/${esc(msFolderName(m))}</code>.</div>`);
+  stageClear('ms'+k); stageInit('ms'+k,'msIn_'+k,'msStage_'+k);
+  document.getElementById('msUp_'+k).onclick=()=>uploadMilestoneFiles(pi,mi);
+  renderMilestoneHead(pi,mi); renderMilestoneGallery(pi,mi);
+  // Drive is the source of truth: refresh the file list in the background
+  syncMilestoneFiles(p,m,true).then(ch=>{ if(ch){renderMilestoneGallery(pi,mi);renderMilestoneHead(pi,mi);} });
+}
+function renderMilestoneHead(pi,mi){
+  const p=projects[pi]; const m=p.data.milestones[mi]; const k=msKey(pi,mi);
+  const head=document.getElementById('ms_head_'+k), btns=document.getElementById('ms_btns_'+k);
+  if(!head||!btns)return;
+  const today=new Date(); today.setHours(0,0,0,0);
+  const dt=new Date(m.date+'T00:00:00'); const diff=Math.round((dt-today)/86400000);
+  let status;
+  if(m.done)status=`<span style="color:#12b76a;font-weight:700">✓ done${m.doneAt?' · '+esc(m.doneAt):''}</span>`;
+  else if(diff<0)status=`<span style="color:#b42318;font-weight:700">overdue by ${-diff} day${-diff===1?'':'s'}</span>`;
+  else if(diff===0)status=`<span style="color:var(--warn);font-weight:700">due today</span>`;
+  else status=`in ${diff} day${diff===1?'':'s'}`;
+  head.innerHTML=`<div class="msinfo">
+    <b>Project</b><span style="cursor:pointer;text-decoration:underline dotted" onclick="closeModal();selectedProjectIndex=${pi};activeNav='projects';renderNav();renderProject()">${esc(p.data.name)}</span>
+    <b>Date</b><span class="mono">${esc(m.date)}</span>
+    <b>Status</b><span>${status}</span>
+    <b>Files</b><span>${(m.files||[]).length}</span>
+  </div>`;
+  btns.innerHTML=`
+    <button class="btn btn-acc" style="flex:1" onclick="toggleMilestoneDone(${pi},${mi})">${m.done?'↺ Mark as not done':'✓ Mark as done'}</button>
+    <button class="btn btn-out" style="flex:1" onclick="openMilestoneFolder(${pi},${mi})">📁 Open folder</button>`;
+}
+function renderMilestoneGallery(pi,mi){
+  const m=projects[pi].data.milestones[mi]; const g=document.getElementById('msGal_'+msKey(pi,mi));
+  if(!g)return;
+  const files=m.files||[];
+  if(!files.length){g.innerHTML='<div class="empty-note" style="grid-column:1/-1">No files attached yet.</div>';return;}
+  g.innerHTML='';
+  files.forEach(f=>{
+    const d=document.createElement('div');d.className='fcard';
+    d.innerHTML=`${f.thumb?`<img src="${f.thumb}" referrerpolicy="no-referrer" onerror="this.style.display='none'">`:''}
+      <div class="fmeta"><div class="ftype">${esc((f.type||'file').toUpperCase())}</div>
+      <a href="${f.link}" target="_blank">${esc(f.name)}</a></div>`;
+    g.appendChild(d);
+  });
+}
+async function toggleMilestoneDone(pi,mi){
+  const p=projects[pi]; const m=p.data.milestones[mi];
+  m.done=!m.done;
+  m.doneAt=m.done?new Date().toISOString().slice(0,10):'';
+  setBusy(true,'Saving…');
+  try{ await saveProject(p); toast(m.done?'Milestone marked as done':'Milestone reopened'); }
+  catch(e){ m.done=!m.done; toast('Save failed: '+(e.message||e),true); }
+  setBusy(false);
+  renderMilestoneHead(pi,mi);
+  if(activeNav==='timeline')renderTimeline();
+}
+async function uploadMilestoneFiles(pi,mi){
+  const p=projects[pi]; const m=p.data.milestones[mi]; const k=msKey(pi,mi);
+  const files=staged('ms'+k);
+  if(!files.length){toast('Choose file(s) first',true);return;}
+  const btn=document.getElementById('msUp_'+k); btn.innerHTML='<span class="loader"></span>';
+  setBusy(true,'Uploading to Drive…');
+  try{
+    const fid=await ensureMilestoneFolder(p,m);
+    m.files=m.files||[];
+    for(const f of files){
+      const r=await uploadFile(f,fid);
+      m.files.push({id:r.id,name:r.name,link:r.webViewLink,thumb:r.thumbnailLink,type:inferType(r)});
+    }
+    await saveProject(p);
+    stageClear('ms'+k); stageRender('ms'+k,'msStage_'+k);
+    renderMilestoneGallery(pi,mi); renderMilestoneHead(pi,mi);
+    if(activeNav==='timeline')renderTimeline();
+    toast('Files attached');
+  }catch(e){ toast('Upload failed: '+(e.message||e),true); }
+  setBusy(false);
+  if(document.getElementById('msUp_'+k))document.getElementById('msUp_'+k).textContent='Upload';
+}
+async function openMilestoneFolder(pi,mi){
+  const p=projects[pi]; const m=p.data.milestones[mi];
+  try{
+    const had=m.folderId;
+    const fid=await ensureMilestoneFolder(p,m);
+    if(fid!==had)await saveProject(p);
     window.open('https://drive.google.com/drive/folders/'+fid,'_blank');
   }catch(e){ toast('Could not open folder: '+(e.message||e),true); }
 }
@@ -4728,7 +4968,7 @@ async function doUpload(p,si){
   setBusy(true,'Uploading to Drive…');
   try{
     // files grouped into a subfolder named after the sample, e.g. ProjectFolder/S-01/
-    const sampleFolder=await ensureSubfolder(sampleFolderName(s.label),p.folderId);
+    const sampleFolder=await ensureSubfolder(sampleFolderName(s.label),await sampleParentFolder(p,s));
     s.folderId=sampleFolder;
     for(const file of files){
       const r=await uploadFile(file,sampleFolder);
@@ -4769,8 +5009,8 @@ function newSampleForm(p,presetGroup){
     ${copyOpts?`<div class="field"><label>Copy parameters from</label>
       <div style="display:flex;gap:8px;align-items:center">
         <select id="ns_copy" style="flex:1"><option value="">— start empty —</option>${copyOpts}</select>
-        <label class="chk"><input type="checkbox" id="ns_copyL" checked> laser</label>
-        <label class="chk"><input type="checkbox" id="ns_copyR" checked> recipe</label>
+        <label class="chk"><input type="checkbox" id="ns_copyL"> laser</label>
+        <label class="chk"><input type="checkbox" id="ns_copyR"> recipe</label>
       </div></div>`:''}
     <div class="field">
       <label>Photos / files <span style="text-transform:none;letter-spacing:0;font-weight:400">(optional)</span></label>
@@ -4804,6 +5044,10 @@ function newSampleForm(p,presetGroup){
                 group:document.getElementById('ns_group').value.trim(),
                 laser:{},files:[],created:new Date().toISOString()};
       const src=cp&&cp.value!==''?p.data.samples[Number(cp.value)]:null;
+      if(src&&!document.getElementById('ns_copyL').checked&&!document.getElementById('ns_copyR').checked){
+        err.textContent='Tick laser and/or recipe to copy from '+src.label+', or set "Copy parameters from" back to empty.';
+        err.classList.add('show'); btn.textContent='Add sample'; return;
+      }
       if(src){
         if(document.getElementById('ns_copyL').checked&&src.laser)sm.laser=JSON.parse(JSON.stringify(src.laser));
         if(document.getElementById('ns_copyR').checked&&src.recipe){
@@ -4813,7 +5057,7 @@ function newSampleForm(p,presetGroup){
           sm.recipe.recipeDateTime=nowStamp();
         }
       }
-      sm.folderId=await ensureSubfolder(sampleFolderName(label),p.folderId);
+      sm.folderId=await ensureSubfolder(sampleFolderName(label),await sampleParentFolder(p,sm));
       const files=staged('nsFiles');
       for(const f of files){
         const r=await uploadFile(f,sm.folderId);
