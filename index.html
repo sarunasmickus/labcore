@@ -329,6 +329,22 @@
   .panel-head h3{margin:0;font-size:13px;letter-spacing:1.4px;text-transform:uppercase;
     display:flex;align-items:center;gap:8px}
 
+  .chk{display:inline-flex;align-items:center;gap:5px;font-size:12px;text-transform:none;letter-spacing:0;
+    margin:0;color:var(--ink);white-space:nowrap}
+  .chk input{width:auto;margin:0}
+
+  /* ---- SAMPLE GROUPS ---- */
+  .sgroup{border:1px solid var(--line);border-radius:10px;margin-bottom:12px;background:var(--panel2);overflow:hidden}
+  .sgroup-head{display:flex;align-items:center;gap:10px;padding:10px 14px;cursor:pointer;user-select:none}
+  .sgroup-head:hover{background:#e9ecf1}
+  .sgroup-arrow{width:14px;color:var(--mute);font-size:13px}
+  .sgroup-name{font-weight:800;font-size:14px}
+  .sgroup-n{font-size:12px;color:var(--mute);margin-left:2px}
+  .sgroup-meta{opacity:.8}
+  .sgroup-add{margin-left:auto;padding:5px 11px;font-size:12px}
+  .sgroup-body{padding:12px;background:#fff;border-top:1px solid var(--line)}
+  .sgroup.closed .sgroup-body{display:none}
+
   /* ---- SAMPLE TILES ---- */
   .sgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:12px}
   .stile{border:1px solid var(--line);border-radius:10px;padding:13px 14px;background:#fff;cursor:pointer;
@@ -472,6 +488,39 @@
   .data-txt b{font-size:14px;font-weight:800}
   .data-txt small{font-size:11px;color:var(--mute);font-weight:500}
   .data-btn:hover .data-txt small{color:var(--acc)}
+
+  /* ---- TIMELINE ---- */
+  .tl-wrap{border:1px solid var(--line);border-radius:10px;background:#fff;box-shadow:var(--shadow);overflow-x:auto}
+  .tl-row{display:flex;border-bottom:1px solid var(--line);min-height:46px}
+  .tl-row:last-child{border-bottom:none}
+  .tl-head{position:sticky;top:0;background:var(--panel2);z-index:2;min-height:0}
+  .tl-label{width:240px;flex-shrink:0;padding:8px 12px;border-right:1px solid var(--line);
+    display:flex;flex-direction:column;justify-content:center;cursor:pointer;background:#fff}
+  .tl-head .tl-label{background:var(--panel2);cursor:default}
+  .tl-label:hover b{color:var(--acc)}
+  .tl-label b{font-size:13px;line-height:1.25}
+  .tl-label small{font-size:11px;color:var(--mute);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .tl-track{flex:1;position:relative;min-width:600px}
+  .tl-months{display:flex;border-bottom:1px solid var(--line)}
+  .tl-month{font-size:11px;font-weight:800;letter-spacing:.5px;color:var(--mute);padding:5px 8px;
+    border-right:1px solid var(--line);white-space:nowrap;overflow:hidden}
+  .tl-weeks{display:flex}
+  .tl-week{flex:1;text-align:center;padding:4px 0 5px;border-right:1px solid var(--line);font-size:11px;line-height:1.15}
+  .tl-week b{display:block;font-size:12px}
+  .tl-week span{color:var(--mute);font-size:9px;text-transform:uppercase;letter-spacing:.5px}
+  .tl-week.now{background:#eef3fe}
+  .tl-week.now b{color:var(--acc)}
+  .tl-row:not(.tl-head) .tl-track{background:repeating-linear-gradient(90deg,transparent 0,transparent calc(100%/var(--wk,12) - 1px),var(--line) calc(100%/var(--wk,12) - 1px),var(--line) calc(100%/var(--wk,12)))}
+  .tl-bar{position:absolute;top:11px;height:24px;border-radius:6px;color:#fff;font-size:12px;font-weight:700;
+    display:flex;align-items:center;padding:0 9px;overflow:hidden;white-space:nowrap;box-shadow:var(--shadow)}
+  .tl-bar.p-urgent{background:#d92d20} .tl-bar.p-high{background:#f79009}
+  .tl-bar.p-medium{background:#2f6df6} .tl-bar.p-low{background:#98a2b3}
+  .tl-bar.done{background:#12b76a} .tl-bar.over{outline:2px solid #b42318;outline-offset:1px}
+  .tl-ms{position:absolute;top:15px;width:14px;height:14px;background:#fff;border:2.5px solid var(--ink);
+    transform:translateX(-50%) rotate(45deg);border-radius:2px;z-index:1}
+  .tl-ms.done{background:#12b76a;border-color:#12b76a}
+  .tl-ms.over{border-color:#b42318;background:#fdeceb}
+  .tl-today{position:absolute;top:0;bottom:0;width:2px;background:var(--warn);z-index:1;opacity:.8}
 
   /* ---- WHO IS IN ---- */
   .pres-wrap{overflow:auto;border:1px solid var(--line);border-radius:10px;background:#fff;
@@ -644,7 +693,7 @@
 /* ============================================================
    CONFIG  —  EDIT THESE TWO VALUES (see instructions below)
    ============================================================ */
-const LABCORE_VERSION = '2026-11-04 g';   // bump on every release
+const LABCORE_VERSION = '2026-11-04 h';   // bump on every release
 /* The one LABCORE_DATA folder everyone uses. Paste its Drive folder ID here
    (from the folder's URL: drive.google.com/drive/folders/<THIS PART>).
    When set, LabCore never searches for or creates a folder — it uses this
@@ -1254,7 +1303,8 @@ async function writeParamsExcel(p){
                'Enter data in LabCore instead.';
   const buildSheet=(rows)=>{
     const header=['Parameter',...(samples.length?samples.map(s=>s.label):['(no samples)'])];
-    const aoa=[[BANNER],[],header];
+    const groupRow=['Group',...(samples.length?samples.map(s=>sampleGroup(s)):[''])];
+    const aoa=[[BANNER],[],header,groupRow];
     rows.forEach(([label,get])=>{
       aoa.push([label,...(samples.length?samples.map(s=>get(s)):[''])]);
     });
@@ -1422,6 +1472,7 @@ function mergeSample(b,o,t){
   return {
     label:pick(b.label,o.label,t.label),
     material:pick(b.material,o.material,t.material),
+    group:pick(b.group,o.group,t.group),
     created:o.created||t.created,
     folderId:o.folderId||t.folderId,
     laser:pick(b.laser,o.laser,t.laser),
@@ -1432,9 +1483,10 @@ function mergeSample(b,o,t){
 }
 function mergeProject(base,ours,theirs){
   const out=JSON.parse(JSON.stringify(theirs));
-  ['name','status','priority','deadline','description'].forEach(k=>{
+  ['name','status','priority','deadline','description','start'].forEach(k=>{
     out[k]=pick(base[k],ours[k],theirs[k]);
   });
+  out.milestones=pick(base.milestones||[],ours.milestones||[],theirs.milestones||[]);
   out.people =mergeStrings(base.people||[],ours.people||[],theirs.people||[],x=>String(x).toLowerCase());
   out.tasks  =mergeObjects(base.tasks||[],ours.tasks||[],theirs.tasks||[],
                            t=>String(t.text||'').toLowerCase(),mergeTask);
@@ -1591,6 +1643,7 @@ const NAV=[
   {group:'Lab'},
   {id:'projects',  icon:'▤', label:'Projects',     ready:true,  view:()=>renderHome()},
   {id:'printer',   icon:'⎙', label:'Printer',      ready:true,  view:()=>renderPrinter()},
+  {id:'timeline',  icon:'▬', label:'Timeline',     ready:true,  view:()=>renderTimeline()},
   {id:'presence',  icon:'▦', label:'Attendance',   ready:true,  view:()=>renderPresence()},
   {id:'buylist',   icon:'⊕', label:'Buy list',     ready:false},
   {id:'inventory', icon:'⚗', label:'Inventory',    ready:false},
@@ -2303,6 +2356,101 @@ function setPrnState(kind,text){
   const el=document.getElementById('prn_state'); if(!el)return;
   el.className='syncstate '+kind;
   el.innerHTML=(kind==='busy'?'<span class="loader"></span>':(kind==='err'?'⚠':'✓'))+' <span>'+esc(text)+'</span>';
+}
+
+/* ================= TIMELINE (Gantt) =================
+   Weeks across the top, projects down the side. A bar runs from the
+   project's start date (or its creation date) to its deadline; milestones
+   are diamonds on the bar. Today is a vertical line.                    */
+let tlWeeks=12, tlFrom=null;    // tlFrom = Monday of the first shown week
+function tlMonday(d){ const x=new Date(d.getFullYear(),d.getMonth(),d.getDate()); x.setDate(x.getDate()-((x.getDay()+6)%7)); return x; }
+function tlDays(a,b){ return Math.round((b-a)/86400000); }
+function tlShift(n){ tlFrom.setDate(tlFrom.getDate()+7*n); renderTimeline(); }
+function tlToday(){ tlFrom=tlMonday(new Date()); tlFrom.setDate(tlFrom.getDate()-14); renderTimeline(); }
+function tlSpan(n){ tlWeeks=n; renderTimeline(); }
+function renderTimeline(){
+  if(!tlFrom){ tlFrom=tlMonday(new Date()); tlFrom.setDate(tlFrom.getDate()-14); }
+  const from=new Date(tlFrom), to=new Date(from); to.setDate(to.getDate()+tlWeeks*7);
+  const totalDays=tlWeeks*7;
+  const today=new Date(); today.setHours(0,0,0,0);
+  const pct=d=>Math.max(0,Math.min(100,tlDays(from,d)/totalDays*100));
+
+  const rows=projects.map((p,i)=>({p,i}))
+    .filter(x=>(x.p.data.status||'active')!=='archived')
+    .map(x=>{
+      const d=x.p.data;
+      const end=d.deadline?new Date(d.deadline+'T00:00:00'):null;
+      let start=d.start?new Date(d.start+'T00:00:00'):(d.created?new Date(d.created):null);
+      if(start)start.setHours(0,0,0,0);
+      if(start&&end&&start>end)start=new Date(end);
+      return {...x,start,end,ms:(d.milestones||[]).map(m=>({...m,dt:new Date(m.date+'T00:00:00')}))};
+    })
+    .filter(x=>x.end||x.ms.length)
+    .filter(x=>{ const a=x.start||x.end, b=x.end||x.start; return !(b<from||a>to) || x.ms.some(m=>m.dt>=from&&m.dt<to); })
+    .sort((a,b)=>((a.start||a.end)-(b.start||b.end)));
+
+  // week header + month header
+  let months='',weeks='';
+  let mStart=0, curM=from.getMonth(), curY=from.getFullYear();
+  for(let w=0;w<=tlWeeks;w++){
+    const d=new Date(from); d.setDate(d.getDate()+w*7);
+    if(w===tlWeeks||d.getMonth()!==curM){
+      const span=w-mStart;
+      months+=`<div class="tl-month" style="flex:${span}">${new Date(curY,curM,1).toLocaleDateString(undefined,{month:'short',year:'2-digit'})}</div>`;
+      mStart=w; curM=d.getMonth(); curY=d.getFullYear();
+    }
+    if(w<tlWeeks){
+      const isThis=today>=d&&today<new Date(d.getFullYear(),d.getMonth(),d.getDate()+7);
+      weeks+=`<div class="tl-week${isThis?' now':''}"><b>${d.getDate()}</b><span>${d.toLocaleDateString(undefined,{month:'short'})}</span></div>`;
+    }
+  }
+  const todayPct=(today>=from&&today<to)?pct(today):null;
+
+  const body=rows.length?rows.map(({p,i,start,end,ms})=>{
+    const d=p.data, prio=(d.priority||'Medium').toLowerCase(), done=d.status==='done';
+    const s=start||end, e=end||start;
+    const left=pct(s), right=pct(new Date(e.getFullYear(),e.getMonth(),e.getDate()+1));
+    const over=!done&&end&&end<today;
+    const bar=`<div class="tl-bar p-${prio}${done?' done':''}${over?' over':''}" style="left:${left}%;width:${Math.max(0.6,right-left)}%"
+        title="${esc(d.name)} · ${s.toLocaleDateString()} → ${e.toLocaleDateString()}">
+        <span>${esc(d.name)}</span></div>`;
+    const dia=ms.filter(m=>m.dt>=from&&m.dt<to).map(m=>
+      `<div class="tl-ms${m.done?' done':''}${(!m.done&&m.dt<today)?' over':''}" style="left:${pct(m.dt)}%" title="${esc(m.date)} · ${esc(m.text)}"></div>`).join('');
+    const nextMs=ms.filter(m=>!m.done&&m.dt>=today).sort((a,b)=>a.dt-b.dt)[0];
+    return `<div class="tl-row">
+      <div class="tl-label" onclick="selectedProjectIndex=${i};activeNav='projects';renderNav();renderProject()">
+        <b>${esc(d.name)}</b>
+        <small>${done?'✓ done':(end?deadlineInfo(d.deadline).label:'no deadline')}${nextMs?' · ◆ '+esc(nextMs.text)+' '+esc(nextMs.date):''}</small>
+      </div>
+      <div class="tl-track">${bar}${dia}${todayPct!==null?`<div class="tl-today" style="left:${todayPct}%"></div>`:''}</div>
+    </div>`;}).join('')
+    :'<div class="empty-note" style="margin:14px">No projects with a deadline in this period. Set a deadline (and optionally a start date and milestones) in a project\'s Edit screen.</div>';
+
+  document.getElementById('mainView').innerHTML=`
+    <div class="tilebar">
+      <h2>Timeline</h2>
+      <span style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        <button class="btn btn-out" style="padding:7px 12px" onclick="tlShift(-4)">‹‹</button>
+        <button class="btn btn-out" style="padding:7px 12px" onclick="tlShift(-1)">‹</button>
+        <button class="btn btn-out" style="padding:7px 12px" onclick="tlToday()">Today</button>
+        <button class="btn btn-out" style="padding:7px 12px" onclick="tlShift(1)">›</button>
+        <button class="btn btn-out" style="padding:7px 12px" onclick="tlShift(4)">››</button>
+        <span class="modetog" style="margin:0 0 0 8px">
+          ${[8,12,26,52].map(n=>`<button class="tbtn sm${tlWeeks===n?' on':''}" onclick="tlSpan(${n})">${n} wk</button>`).join('')}
+        </span>
+      </span>
+    </div>
+    <div class="pres-legend">
+      <span><i style="background:#d92d20"></i> urgent</span><span><i style="background:#f79009"></i> high</span>
+      <span><i style="background:#2f6df6"></i> medium</span><span><i style="background:#98a2b3"></i> low</span>
+      <span><i style="background:#12b76a"></i> done</span>
+      <span>◆ milestone (report due, samples to send…)</span>
+      <span><i style="background:var(--warn);width:2px"></i> today</span>
+    </div>
+    <div class="tl-wrap" style="--wk:${tlWeeks}">
+      <div class="tl-row tl-head"><div class="tl-label"></div><div class="tl-track"><div class="tl-months">${months}</div><div class="tl-weeks">${weeks}</div></div></div>
+      ${body}
+    </div>`;
 }
 
 /* ================= ATTENDANCE =================
@@ -3337,6 +3485,30 @@ function closeModal(){
    click or keypress can never discard a half-finished recipe */
 
 /* ---------- EDIT PROJECT (name, status, priority, deadline, description, people) ---------- */
+function epAddMs(){
+  const dt=document.getElementById('ep_msdate').value, tx=document.getElementById('ep_mstext').value.trim();
+  if(!dt||!tx){toast('Milestone needs a date and a text',true);return;}
+  window._epMs.push({date:dt,text:tx,done:false});
+  document.getElementById('ep_mstext').value=''; epRenderMs();
+}
+function epRenderMs(){
+  const el=document.getElementById('ep_ms'); if(!el)return;
+  window._epMs.sort((a,b)=>a.date.localeCompare(b.date));
+  const ms=window._epMs;
+  if(!ms.length){el.innerHTML='<div class="empty-note" style="padding:8px">No milestones.</div>';return;}
+  el.innerHTML='';
+  ms.forEach((m,i)=>{
+    const row=document.createElement('div'); row.className='taskrow';
+    row.innerHTML=`<label style="display:flex;align-items:center;gap:9px;margin:0;cursor:pointer;text-transform:none;letter-spacing:0;color:var(--ink);font-size:13px;flex:1">
+        <input type="checkbox" ${m.done?'checked':''} style="width:auto">
+        <span class="mono" style="color:var(--mute);font-size:12px">${esc(m.date)}</span>
+        <span style="${m.done?'text-decoration:line-through;color:var(--mute)':''}">${esc(m.text)}</span></label>
+      <button class="taskdel">✕</button>`;
+    row.querySelector('input').onchange=e=>{m.done=e.target.checked;epRenderMs();};
+    row.querySelector('.taskdel').onclick=()=>{ms.splice(i,1);epRenderMs();};
+    el.appendChild(row);
+  });
+}
 function openProjectEdit(p){
   const d=p.data;
   document.getElementById('mainView').innerHTML=`
@@ -3359,8 +3531,22 @@ function openProjectEdit(p){
           <div class="field"><label>Deadline<span class="req">*</span></label>
             <input type="date" id="ep_deadline" value="${d.deadline||''}"></div>
         </div>
-        <div class="field" style="margin-bottom:0"><label>Description<span class="req">*</span></label>
+        <div class="field"><label>Description<span class="req">*</span></label>
           <textarea id="ep_desc" rows="3">${esc(d.description||'')}</textarea></div>
+        <div class="two">
+          <div class="field"><label>Start date <span style="text-transform:none;letter-spacing:0;font-weight:400">(for the timeline)</span></label>
+            <input type="date" id="ep_start" value="${d.start||''}"></div>
+          <div class="field"><label>&nbsp;</label>
+            <div style="font-size:12px;color:var(--mute);line-height:1.5;padding-top:8px">Start → deadline is drawn as a bar on the Timeline tab.</div></div>
+        </div>
+        <div class="field" style="margin-bottom:0"><label>Milestones <span style="text-transform:none;letter-spacing:0;font-weight:400">(report due, samples to send…)</span></label>
+          <div id="ep_ms"></div>
+          <div style="display:flex;gap:7px;margin-top:6px">
+            <input type="date" id="ep_msdate" style="width:150px">
+            <input id="ep_mstext" placeholder="e.g. Send samples to partner" style="flex:1"
+              onkeydown="if(event.key==='Enter'){event.preventDefault();epAddMs()}">
+            <button class="btn btn-out" type="button" onclick="epAddMs()" style="padding:8px 14px">+</button>
+          </div></div>
         <div class="errmsg" id="eperr"></div>
       </div>
 
@@ -3381,6 +3567,8 @@ function openProjectEdit(p){
       <button class="btn btn-out" onclick="renderProject()">Cancel</button>
     </div>`;
   renderProjectPeople(p);
+  window._epMs=JSON.parse(JSON.stringify(d.milestones||[]));
+  epRenderMs();
   document.getElementById('ep_save').onclick=async()=>{
     const g=id=>document.getElementById(id);
     ['ep_name','ep_deadline','ep_desc'].forEach(id=>g(id).classList.remove('invalid'));
@@ -3398,6 +3586,8 @@ function openProjectEdit(p){
     try{
       d.name=name; d.status=g('ep_status').value; d.priority=g('ep_priority').value;
       d.deadline=dl; d.description=desc;
+      d.start=g('ep_start').value||'';
+      d.milestones=(window._epMs||[]).slice().sort((a,b)=>a.date.localeCompare(b.date));
       await saveProject(p);
       peopleColorMap=null;
       toast('Project updated'); renderProject();
@@ -3610,46 +3800,84 @@ async function checkProjectFreshness(){
 
 /* ---------- Samples ---------- */
 /* ---------- SAMPLES as tiles with parameter bubbles ---------- */
+/* A sample's group: explicit group if set, otherwise its material. */
+function sampleGroup(sm){ return (sm.group||sm.material||'').trim()||'Ungrouped'; }
+function projectGroups(p){
+  const map=new Map();
+  (p.data.samples||[]).forEach(sm=>{ const g=sampleGroup(sm); if(!map.has(g.toLowerCase()))map.set(g.toLowerCase(),g); });
+  return [...map.values()].sort((a,b)=>a==='Ungrouped'?1:b==='Ungrouped'?-1:a.localeCompare(b));
+}
+let collapsedGroups={};          // projectFolderId|group -> true
+
+function sampleTile(p,sm,si){
+  const nFiles=(sm.files||[]).length;
+  const hasLaser=hasValues(sm.laser);
+  const hasRecipe=!!(sm.recipe&&(sm.recipe.rows||[]).length);
+  const hasChem=hasRecipe||hasValues(sm.chem);
+  const el=document.createElement('div');
+  el.className='stile';
+  el.innerHTML=`
+    <div>
+      <div class="stile-name">${esc(sm.label)}</div>
+      <div class="stile-sub">${esc(sm.material||'no material')}</div>
+    </div>
+    <div class="stile-btns">
+      <button class="pbtn laser${hasLaser?' filled':''}" title="Laser parameters">L</button>
+      <button class="pbtn chem${hasChem?' filled':''}" title="Chemical recipe">R${hasRecipe&&sm.recipe.printedAt?'<span class="recdot" title="printed"></span>':''}</button>
+      <button class="pbtn files${nFiles?' filled':''}" title="Photos &amp; files">${nFiles||'0'}</button>
+    </div>`;
+  el.onclick=()=>showSample(p,si);
+  const [bL,bC,bF]=el.querySelectorAll('.pbtn');
+  bL.onclick=e=>{e.stopPropagation();showParams(p,si,'laser');};
+  bC.onclick=e=>{e.stopPropagation();showRecipe(p,si);};
+  bF.onclick=e=>{e.stopPropagation();showFiles(p,si);};
+  return el;
+}
+
 function renderSamples(p){
   const area=document.getElementById('sampleArea');
-  if(!area)return;                       // project view not on screen
+  if(!area)return;
   if(!p.data.samples.length){
     area.innerHTML='<div class="empty-note">No samples yet. Add one to record laser &amp; chemical parameters and upload photos.</div>';
     return;
   }
-  area.innerHTML='<div class="sgrid"></div>';
-  const grid=area.querySelector('.sgrid');
-  // newest samples first (keep each sample's real index for editing)
+  // newest first, keeping real indices
   const order=p.data.samples.map((sm,si)=>({sm,si})).sort((a,b)=>{
-    const ta=a.sm.created?Date.parse(a.sm.created):null;
-    const tb=b.sm.created?Date.parse(b.sm.created):null;
-    if(ta&&tb&&ta!==tb)return tb-ta;      // newer timestamp first
-    return b.si-a.si;                      // otherwise later in the list = newer
+    const ta=a.sm.created?Date.parse(a.sm.created):null, tb=b.sm.created?Date.parse(b.sm.created):null;
+    if(ta&&tb&&ta!==tb)return tb-ta; return b.si-a.si;
   });
-  order.forEach(({sm,si})=>{
-    const nFiles=(sm.files||[]).length;
-    const hasLaser=hasValues(sm.laser);
-    const hasRecipe=!!(sm.recipe&&(sm.recipe.rows||[]).length);
-    const hasChem=hasRecipe||hasValues(sm.chem);
-    const el=document.createElement('div');
-    el.className='stile';
-    el.innerHTML=`
-      <div>
-        <div class="stile-name">${esc(sm.label)}</div>
-        <div class="stile-sub">${esc(sm.material||'no material')}</div>
+  const groups=projectGroups(p);
+  area.innerHTML='';
+  // a single group (or only "Ungrouped") → plain grid, no headers
+  if(groups.length<=1){
+    const grid=document.createElement('div'); grid.className='sgrid';
+    order.forEach(({sm,si})=>grid.appendChild(sampleTile(p,sm,si)));
+    area.appendChild(grid); return;
+  }
+  groups.forEach(g=>{
+    const items=order.filter(x=>sampleGroup(x.sm).toLowerCase()===g.toLowerCase());
+    const key=p.folderId+'|'+g.toLowerCase();
+    const open=!collapsedGroups[key];
+    const sec=document.createElement('div'); sec.className='sgroup'+(open?'':' closed');
+    const withL=items.filter(x=>hasValues(x.sm.laser)).length;
+    const withR=items.filter(x=>x.sm.recipe&&(x.sm.recipe.rows||[]).length).length;
+    sec.innerHTML=`
+      <div class="sgroup-head">
+        <span class="sgroup-arrow">${open?'▾':'▸'}</span>
+        <span class="sgroup-name">${esc(g)}</span>
+        <span class="sgroup-n">${items.length} sample${items.length===1?'':'s'}
+          <span class="sgroup-meta">· L ${withL}/${items.length} · R ${withR}/${items.length}</span></span>
+        <button class="btn btn-out sgroup-add" title="Add a sample to this group">+ Add here</button>
       </div>
-      <div class="stile-btns">
-        <button class="pbtn laser${hasLaser?' filled':''}" title="Laser parameters">L</button>
-        <button class="pbtn chem${hasChem?' filled':''}" title="Chemical recipe">R${hasRecipe&&sm.recipe.printedAt?'<span class="recdot" title="printed"></span>':''}</button>
-        <button class="pbtn files${nFiles?' filled':''}" title="Photos &amp; files">${nFiles||'0'}</button>
-      </div>`;
-    // whole tile opens the full overview; the small buttons are shortcuts
-    el.onclick=()=>showSample(p,si);
-    const [bL,bC,bF]=el.querySelectorAll('.pbtn');
-    bL.onclick=e=>{e.stopPropagation();showParams(p,si,'laser');};
-    bC.onclick=e=>{e.stopPropagation();showRecipe(p,si);};
-    bF.onclick=e=>{e.stopPropagation();showFiles(p,si);};
-    grid.appendChild(el);
+      <div class="sgrid sgroup-body"></div>`;
+    sec.querySelector('.sgroup-head').onclick=e=>{
+      if(e.target.closest('.sgroup-add'))return;
+      collapsedGroups[key]=!collapsedGroups[key]; renderSamples(p);
+    };
+    sec.querySelector('.sgroup-add').onclick=e=>{e.stopPropagation();newSampleForm(p,g);};
+    const body=sec.querySelector('.sgroup-body');
+    items.forEach(({sm,si})=>body.appendChild(sampleTile(p,sm,si)));
+    area.appendChild(sec);
   });
 }
 /* does a parameter group have any values filled in? */
@@ -4160,6 +4388,7 @@ async function saveDetailsEdit(p,si){
   const oldLabel=sm.label;
   sm.label=label;
   sm.material=document.getElementById('sd_material').value.trim();
+  sm.group=(document.getElementById('sd_group')||{value:''}).value.trim();
   try{
     await withSaving('Saving sample…', async()=>{
       if(oldLabel!==label){
@@ -4178,11 +4407,14 @@ function sampleHeadHtml(sm,si){
   if(detailsEditing){
     return `<div class="smp-head">
       <div style="flex:1;min-width:220px">
-        <div class="two">
+        <div class="three">
           <div class="field" style="margin:0"><label>Sample name</label>
             <input id="sd_label" value="${esc(sm.label||'')}"></div>
           <div class="field" style="margin:0"><label>Material</label>
             <input id="sd_material" value="${esc(sm.material||'')}" placeholder="e.g. Ti-6Al-4V"></div>
+          <div class="field" style="margin:0"><label>Group</label>
+            <input id="sd_group" list="sd_groups" value="${esc(sm.group||'')}" placeholder="= material">
+            <datalist id="sd_groups">${projectGroups(projects[selectedProjectIndex]).filter(g=>g!=='Ungrouped').map(g=>`<option value="${esc(g)}">`).join('')}</datalist></div>
         </div>
       </div>
       <div class="smp-acts">
@@ -4196,7 +4428,8 @@ function sampleHeadHtml(sm,si){
   // the name already sits in the popup's title bar, so only the material repeats here
   return `<div class="smp-head">
     <div class="smp-mat"><span class="lbl">Material</span>
-      <span class="val${sm.material?'':' none'}">${sm.material?esc(sm.material):'not specified'}</span></div>
+      <span class="val${sm.material?'':' none'}">${sm.material?esc(sm.material):'not specified'}</span>
+      ${sm.group?`<span class="lbl" style="margin-left:10px">Group</span><span class="val">${esc(sm.group)}</span>`:''}</div>
     <div class="smp-acts">
       <button class="btn btn-acc" style="padding:9px 16px;font-size:13px"
         onclick="startDetailsEdit(projects[selectedProjectIndex],${si})">✎ Edit sample</button>
@@ -4204,6 +4437,53 @@ function sampleHeadHtml(sm,si){
         onclick="openSampleFolder(projects[selectedProjectIndex],${si})">📁 Open folder</button>
     </div>
   </div>`;
+}
+
+/* ---------- copy laser params / recipe from one sample to others ---------- */
+function copyParamsDialog(p,si,what){
+  const src=p.data.samples[si];
+  const others=p.data.samples.map((sm,i)=>({sm,i})).filter(x=>x.i!==si);
+  if(!others.length){toast('No other samples in this project',true);return;}
+  const grp=sampleGroup(src);
+  const title=what==='laser'?'Apply laser parameters to…':'Apply recipe to…';
+  openModal(`<span class="tag ${what==='laser'?'laser':'chem'}">${what==='laser'?'LASER':'RECIPE'}</span> ${esc(title)}`,`
+    <p style="color:var(--mute);font-size:13px;line-height:1.6;margin-bottom:12px">
+      Copies <b>${esc(src.label)}</b>'s ${what==='laser'?'laser parameters':'recipe'} to the samples you tick.
+      Their existing ${what==='laser'?'parameters':'recipe'} will be replaced.</p>
+    <div style="display:flex;gap:8px;margin-bottom:10px;flex-wrap:wrap">
+      <button class="btn btn-out" style="padding:6px 11px;font-size:12px" onclick="cpSel(true)">All</button>
+      <button class="btn btn-out" style="padding:6px 11px;font-size:12px" onclick="cpSel(false)">None</button>
+      <button class="btn btn-out" style="padding:6px 11px;font-size:12px" onclick="cpSelGroup()">Same group (${esc(grp)})</button>
+      <button class="btn btn-out" style="padding:6px 11px;font-size:12px" onclick="cpSelEmpty()">Only empty ones</button>
+    </div>
+    <div class="tasklist" style="max-height:320px;overflow:auto">
+      ${others.map(({sm,i})=>{ const has=what==='laser'?hasValues(sm.laser):!!(sm.recipe&&(sm.recipe.rows||[]).length);
+        return `<label class="taskrow" style="cursor:pointer;text-transform:none;letter-spacing:0;color:var(--ink);font-size:14px">
+          <span style="display:flex;align-items:center;gap:9px"><input type="checkbox" class="cp-chk" data-i="${i}" data-g="${esc(sampleGroup(sm))}" data-has="${has?1:0}" style="width:auto">
+          <b>${esc(sm.label)}</b> <span style="color:var(--mute);font-size:12px">${esc(sampleGroup(sm))}${has?' · has '+(what==='laser'?'L':'R'):''}</span></span></label>`; }).join('')}
+    </div>
+    <div style="display:flex;gap:9px;margin-top:14px">
+      <button class="btn btn-acc" style="flex:1" id="cp_go">Apply</button>
+      <button class="btn btn-out" onclick="${what==='laser'?'showParams':'showRecipe'}(projects[selectedProjectIndex],${si}${what==='laser'?",'laser'":''})">Cancel</button>
+    </div>`,true);
+  window.cpSel=v=>document.querySelectorAll('.cp-chk').forEach(c=>c.checked=v);
+  window.cpSelGroup=()=>document.querySelectorAll('.cp-chk').forEach(c=>c.checked=(c.dataset.g.toLowerCase()===grp.toLowerCase()));
+  window.cpSelEmpty=()=>document.querySelectorAll('.cp-chk').forEach(c=>c.checked=(c.dataset.has==='0'));
+  document.getElementById('cp_go').onclick=async()=>{
+    const idx=[...document.querySelectorAll('.cp-chk:checked')].map(c=>Number(c.dataset.i));
+    if(!idx.length){toast('Tick at least one sample',true);return;}
+    try{
+      await withSaving('Applying to '+idx.length+' sample(s)…',async()=>{
+        idx.forEach(i=>{ const t=p.data.samples[i];
+          if(what==='laser'){ t.laser=JSON.parse(JSON.stringify(src.laser||{})); }
+          else { t.recipe=JSON.parse(JSON.stringify(src.recipe)); t.recipe.printedAt=''; t.recipe.sampleName=t.label; t.recipe.recipeDateTime=nowStamp(); }
+        });
+        await saveProject(p); await writeParamsExcel(p);
+      });
+      toast('Applied to '+idx.length+' sample(s)'); renderSamples(p);
+      what==='laser'?showParams(p,si,'laser'):showRecipe(p,si);
+    }catch(e){ toast('Could not apply: '+e.message,true); }
+  };
 }
 
 /* ---------- INLINE LASER EDITING (inside the popup) ---------- */
@@ -4354,9 +4634,10 @@ function showParams(p,si,which){
            <button class="btn btn-out"
              onclick="cancelLaserInline(projects[selectedProjectIndex],${si},'laser')">Cancel</button>
          </div>`
-      : `<div style="display:flex;gap:9px;margin-top:16px">
+      : `<div style="display:flex;gap:9px;margin-top:16px;flex-wrap:wrap">
            <button class="btn btn-acc" style="flex:1"
              onclick="startLaserInline(projects[selectedProjectIndex],${si},'laser')">✎ Edit parameters</button>
+           ${hasValues(sm.laser)?`<button class="btn btn-out" onclick="copyParamsDialog(projects[selectedProjectIndex],${si},'laser')">⇶ Apply to others</button>`:''}
            <button class="btn btn-out" onclick="showSample(projects[selectedProjectIndex],${si})">View all</button>
          </div>`);
   openModal(`<span class="tag laser">LASER</span> ${esc(sm.label)}`,body,laserEditing);
@@ -4371,6 +4652,7 @@ function showRecipe(p,si){
        <button class="btn btn-acc" style="flex:1" onclick="editRecipe(projects[selectedProjectIndex],${si})">
          ${sm.recipe?'✎ Edit recipe':'+ New recipe'}</button>
        ${(canPrint()&&sm.recipe)?`<button class="btn btn-blue" onclick="printRecipeNow(projects[selectedProjectIndex],${si})">⎙ Print</button>`:''}
+       ${(sm.recipe&&(sm.recipe.rows||[]).length)?`<button class="btn btn-out" onclick="copyParamsDialog(projects[selectedProjectIndex],${si},'recipe')">⇶ Apply to others</button>`:''}
        <button class="btn btn-out" onclick="showSample(projects[selectedProjectIndex],${si})">View all</button>
      </div>`,true);
 }
@@ -4466,21 +4748,35 @@ async function doUpload(p,si){
 /* ---------- NEW SAMPLE: name, material and files only ----------
    Laser parameters and the chemical recipe are added afterwards from
    the sample's own buttons, so creating a sample stays quick.        */
-function newSampleForm(p){
+function newSampleForm(p,presetGroup){
+  const groups=projectGroups(p).filter(g=>g!=='Ungrouped');
+  const samplesByNew=(p.data.samples||[]).map((sm,si)=>({sm,si}))
+    .sort((a,b)=>(Date.parse(b.sm.created||0)||b.si)-(Date.parse(a.sm.created||0)||a.si));
+  const copyOpts=samplesByNew.map(({sm,si})=>{
+    const has=[hasValues(sm.laser)?'L':'',(sm.recipe&&(sm.recipe.rows||[]).length)?'R':''].filter(Boolean).join('+');
+    return `<option value="${si}">${esc(sm.label)}${has?' · '+has:''}${sm.material?' · '+esc(sm.material):''}</option>`;
+  }).join('');
   openModal('<span class="tag laser">NEW SAMPLE</span> '+esc(p.data.name),`
-    <div class="field"><label>Sample label<span class="req">*</span></label>
-      <input id="ns_label" placeholder="S-01" autofocus></div>
-    <div class="field"><label>Material</label>
-      <input id="ns_material" placeholder="Ti-6Al-4V"></div>
+    <div class="two">
+      <div class="field"><label>Sample label<span class="req">*</span></label>
+        <input id="ns_label" placeholder="S-01" autofocus></div>
+      <div class="field"><label>Material</label>
+        <input id="ns_material" placeholder="Ti-6Al-4V"></div>
+    </div>
+    <div class="field"><label>Group <span style="text-transform:none;letter-spacing:0;font-weight:400">(blank = same as material)</span></label>
+      <input id="ns_group" list="ns_groups" placeholder="e.g. Batch A, PVDF, control…" value="${esc(presetGroup&&presetGroup!=='Ungrouped'?presetGroup:'')}">
+      <datalist id="ns_groups">${groups.map(g=>`<option value="${esc(g)}">`).join('')}</datalist></div>
+    ${copyOpts?`<div class="field"><label>Copy parameters from</label>
+      <div style="display:flex;gap:8px;align-items:center">
+        <select id="ns_copy" style="flex:1"><option value="">— start empty —</option>${copyOpts}</select>
+        <label class="chk"><input type="checkbox" id="ns_copyL" checked> laser</label>
+        <label class="chk"><input type="checkbox" id="ns_copyR" checked> recipe</label>
+      </div></div>`:''}
     <div class="field">
       <label>Photos / files <span style="text-transform:none;letter-spacing:0;font-weight:400">(optional)</span></label>
       <input type="file" id="ns_files" multiple>
       <div id="ns_filelist" class="stage-list"></div>
     </div>
-    <p style="color:var(--mute);font-size:12px;line-height:1.6;margin-bottom:14px">
-      Laser parameters and the chemical recipe can be added afterwards from the sample's
-      <b>L</b> and <b>R</b> buttons.
-    </p>
     <div style="display:flex;gap:9px">
       <button class="btn btn-acc" style="flex:1" id="ns_save">Add sample</button>
       <button class="btn btn-out" onclick="closeModal()">Cancel</button>
@@ -4488,6 +4784,11 @@ function newSampleForm(p){
     <div class="errmsg" id="ns_err"></div>`);
   stageClear('nsFiles');
   stageInit('nsFiles','ns_files','ns_filelist');
+  // picking a source sample pre-fills the material (and group, if empty)
+  const cp=document.getElementById('ns_copy');
+  if(cp)cp.onchange=()=>{ const src=p.data.samples[Number(cp.value)]; if(!src)return;
+    const mat=document.getElementById('ns_material'); if(!mat.value)mat.value=src.material||'';
+    const grp=document.getElementById('ns_group'); if(!grp.value&&src.group)grp.value=src.group; };
   document.getElementById('ns_label').onkeydown=e=>{
     if(e.key==='Enter'){e.preventDefault();document.getElementById('ns_save').click();} };
   document.getElementById('ns_save').onclick=async()=>{
@@ -4500,23 +4801,29 @@ function newSampleForm(p){
     const btn=document.getElementById('ns_save');btn.innerHTML='<span class="loader"></span> Adding…';
     try{
       const sm={label,material:document.getElementById('ns_material').value.trim(),
+                group:document.getElementById('ns_group').value.trim(),
                 laser:{},files:[],created:new Date().toISOString()};
-      // every sample gets its folder straight away, so it can always be
-      // deleted from Drive (deleting the folder removes the sample here)
+      const src=cp&&cp.value!==''?p.data.samples[Number(cp.value)]:null;
+      if(src){
+        if(document.getElementById('ns_copyL').checked&&src.laser)sm.laser=JSON.parse(JSON.stringify(src.laser));
+        if(document.getElementById('ns_copyR').checked&&src.recipe){
+          sm.recipe=JSON.parse(JSON.stringify(src.recipe));
+          sm.recipe.printedAt='';                       // a copy has not been printed
+          sm.recipe.sampleName=label;                   // printout carries the new name
+          sm.recipe.recipeDateTime=nowStamp();
+        }
+      }
       sm.folderId=await ensureSubfolder(sampleFolderName(label),p.folderId);
       const files=staged('nsFiles');
-      if(files.length){
-        const folder=sm.folderId;
-        for(const f of files){
-          const r=await uploadFile(f,folder);
-          sm.files.push({id:r.id,name:r.name,type:inferType({mimeType:f.type,name:f.name}),
-                         link:r.webViewLink,thumb:r.thumbnailLink});
-        }
+      for(const f of files){
+        const r=await uploadFile(f,sm.folderId);
+        sm.files.push({id:r.id,name:r.name,type:inferType({mimeType:f.type,name:f.name}),
+                       link:r.webViewLink,thumb:r.thumbnailLink});
       }
       p.data.samples.push(sm);
       await saveProject(p); await writeParamsExcel(p);
       closeModal(); renderProject();
-      toast('Sample '+label+' added');
+      toast('Sample '+label+' added'+(src?' (copied from '+src.label+')':''));
     }catch(e){
       err.textContent='Could not add the sample: '+(e.message||e);
       err.classList.add('show'); btn.textContent='Add sample';
