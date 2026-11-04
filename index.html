@@ -409,6 +409,9 @@
   .chipx{position:absolute;right:6px;top:50%;transform:translateY(-50%);color:var(--mute);font-size:13px;line-height:1}
   .chipx:hover{color:var(--ink)}
 
+  .browsebox{border:1px solid var(--line);border-radius:10px;padding:10px;margin-bottom:10px;background:var(--panel2)}
+  .browsebox input{margin-bottom:8px}
+  .browselist{max-height:260px;overflow:auto;background:#fff;border:1px solid var(--line);border-radius:8px}
   .sugbox{position:absolute;left:0;right:0;top:100%;margin-top:4px;background:#fff;
     border:1px solid var(--line);border-radius:8px;box-shadow:var(--shadow-lg);
     z-index:60;max-height:260px;overflow-y:auto}
@@ -700,7 +703,7 @@
 /* ============================================================
    CONFIG  —  EDIT THESE TWO VALUES (see instructions below)
    ============================================================ */
-const LABCORE_VERSION = '2026-11-04 k';   // bump on every release
+const LABCORE_VERSION = '2026-11-04 m';   // bump on every release
 /* The one LABCORE_DATA folder everyone uses. Paste its Drive folder ID here
    (from the folder's URL: drive.google.com/drive/folders/<THIS PART>).
    When set, LabCore never searches for or creates a folder — it uses this
@@ -909,6 +912,7 @@ async function onConnected(){
     await loadProjects();
     goProjects();
     startProjectPolling();                       // always land on the board when done
+    autoSyncRecipeSheet();                       // in the background, if a sheet link is saved
   }catch(e){
     console.error('[LABCORE] load failed',e);
     document.getElementById('mainView').innerHTML=
@@ -2050,6 +2054,95 @@ async function loadPrintedLog(){
     printedLog=Array.isArray(j)?j:(j.entries||[]);
   }catch(e){ console.warn('[LABCORE] printed log load',e); printedLog=[]; }
 }
+/* ---- one-time (re-runnable) import of the old Recipe Logger sheet ----
+   Layout, exactly as the old Apps Script wrote it:
+     header row  A printed-at, B sample name, C recipe date, D logo
+     step rows   E #, F step, G time ("5 m."), H "US", I temp, J notes
+     notes row   F = "Notes: …"      blank row = end of recipe          */
+const OLD_RECIPE_SHEET_URL='https://docs.google.com/spreadsheets/d/1M9Gn8u6jYqoBAqnjeDQ7dUax04PphqHUW5uNeSnyask/edit?gid=172316511#gid=172316511';
+function sheetIdFromUrl(url){
+  const m=String(url||'').match(/\/spreadsheets\/d\/([a-zA-Z0-9_-]+)/);
+  const g=String(url||'').match(/[#&?]gid=(\d+)/);
+  return {id:m?m[1]:String(url||'').trim(), gid:g?Number(g[1]):null};
+}
+function serialToIso(v){                       // Sheets serial day number → ISO string
+  if(typeof v!=='number')return String(v||'');
+  if(v<20000)return String(v);
+  const d=new Date(Date.UTC(1899,11,30)+Math.round(v*86400000));
+  return isNaN(d)?String(v):d.toISOString();
+}
+function parseRecipeSheet(values){
+  const out=[]; let cur=null;
+  const S=x=>x===undefined||x===null?'':String(x);
+  values.forEach((row,ri)=>{
+    if(ri===0)return;                          // column headers
+    const sampleName=S(row[1]).trim();
+    const stepText=S(row[5]);
+    if(sampleName){
+      if(cur)out.push(cur);
+      cur={row:ri+1,printedAt:serialToIso(row[0]),sampleName,recipeDateTime:serialToIso(row[2]).replace('T',' ').slice(0,16),
+           logo:S(row[3]).trim(),footer:'',rows:[]};
+      return;
+    }
+    if(!cur)return;
+    if(stepText.indexOf('Notes: ')===0){cur.footer=stepText.slice(7);return;}
+    if(stepText.trim()){
+      const t=splitTimeValue(S(row[6]).trim().replace(/\.\s*$/,''));
+      cur.rows.push({index:cur.rows.length+1,step:stepText.trim(),time:t.num,unit:S(row[6]).trim()?t.unit:'min',
+                     us:S(row[7]).trim().toUpperCase()==='US',temp:S(row[8]).trim(),notes:S(row[9]).trim()});
+    }
+  });
+  if(cur)out.push(cur);
+  return out.filter(r=>r.rows.length);
+}
+async function importRecipeSheet(url){
+  if(!gapi.client.sheets)throw new Error('Google Sheets API is not loaded — reload the page and try again');
+  const {id,gid}=sheetIdFromUrl(url);
+  if(!id)throw new Error('Paste the spreadsheet link first');
+  const meta=await gapi.client.sheets.spreadsheets.get({spreadsheetId:id,fields:'sheets(properties(sheetId,title))'});
+  const sheets=(meta.result.sheets||[]).map(x=>x.properties);
+  const tab=sheets.find(x=>x.sheetId===gid)||sheets.find(x=>x.title==='Recipes')||sheets[0];
+  if(!tab)throw new Error('The spreadsheet has no tabs');
+  const r=await gapi.client.sheets.spreadsheets.values.get({spreadsheetId:id,
+    range:`'${tab.title.replace(/'/g,"''")}'!A:J`,valueRenderOption:'UNFORMATTED_VALUE',dateTimeRenderOption:'SERIAL_NUMBER'});
+  const recipes=parseRecipeSheet(r.result.values||[]);
+  if(!printedLogId&&!printedLog.length)await loadPrintedLog();
+  // The sheet is the source of truth for its own recipes: everything that
+  // came from this sheet is rebuilt from it, so edits and deletions made in
+  // the sheet flow through. Recipes LabCore printed itself are untouched.
+  const prefix='sheet:'+id+':';
+  const old=new Map(); printedLog.filter(e=>e.key&&e.key.startsWith(prefix)).forEach(e=>old.set(e.key,JSON.stringify(e.recipe)));
+  printedLog=printedLog.filter(e=>!(e.key&&e.key.startsWith(prefix)));
+  let added=0,updated=0,same=0; const seen=new Set();
+  recipes.forEach(rc=>{
+    let key=prefix+(rc.sampleName+'|'+rc.printedAt).toLowerCase();
+    if(seen.has(key))key+='|r'+rc.row;                 // two prints with identical name+time
+    seen.add(key);
+    const entry={printedAt:rc.printedAt,project:'Old recipe sheet',sample:rc.sampleName,source:'sheet',key,
+      recipe:{printedAt:rc.printedAt,sampleName:rc.sampleName,recipeDateTime:rc.recipeDateTime,mode:'chem',
+              logo:rc.logo,footer:rc.footer,rows:rc.rows}};
+    if(!old.has(key))added++; else if(old.get(key)!==JSON.stringify(entry.recipe))updated++; else same++;
+    old.delete(key);
+    printedLog.push(entry);
+  });
+  const removed=old.size;
+  if(added||updated||removed){
+    printedLogId=await writeJson('printed_recipes.json',rootFolderId,printedLog,printedLogId);
+    try{ await writePrintedXlsx(); }catch(e){ console.warn('[LABCORE] printed xlsx mirror failed',e); }
+  }
+  return {tab:tab.title,found:recipes.length,added,updated,removed,same,sample:recipes.slice(0,5).map(x=>x.sampleName)};
+}
+/* quiet re-sync at start-up when a sheet link is saved (never blocks loading) */
+async function autoSyncRecipeSheet(){
+  const url=labConfig.oldRecipeSheet; if(!url)return;
+  try{
+    const r=await importRecipeSheet(url);
+    if(r.added||r.updated||r.removed){
+      console.log('[LABCORE] recipe sheet synced',r);
+      toast(`Recipe sheet: ${r.added} new, ${r.updated} changed, ${r.removed} removed`);
+    }
+  }catch(e){ console.warn('[LABCORE] recipe sheet sync skipped:',e.message||e); }
+}
 async function recordPrintedRecipe(p,sm,rec){
   printedLog.push({printedAt:rec.printedAt||new Date().toISOString(),
     project:p.data.name,sample:sampleFullName(sm),recipe:JSON.parse(JSON.stringify(rec))});
@@ -2811,7 +2904,46 @@ function renderSettings(){
       <p style="color:var(--mute);font-size:12px;margin-top:16px;line-height:1.6">
         Saved into the shared <code>LABCORE_DATA</code> folder, so the whole team gets it automatically.
       </p>
+    </div>
+
+    <div class="panelbox" style="max-width:760px;margin-top:18px">
+      <div class="panel-head"><h3><span class="tag chem">RECIPES</span> Import old recipes from the Google Sheet</h3></div>
+      <p style="color:var(--mute);font-size:13px;line-height:1.6;margin-bottom:14px">
+        Reads the old Recipe Logger spreadsheet (the <code>Recipes</code> tab written by the printer page)
+        and adds every recipe to LabCore's printed-recipes log in <code>LABCORE_DATA</code>.
+        After that they show up as suggestions when you create a recipe. The sheet stays the
+        source of truth for these recipes: press the button (or just reopen LabCore) and anything
+        you added, edited or deleted in the sheet is mirrored here. The sheet itself is never changed.
+        You must be signed in with an account that can open the sheet.
+      </p>
+      <div class="field">
+        <label>Spreadsheet link</label>
+        <input id="cfg_sheet" placeholder="https://docs.google.com/spreadsheets/d/…/edit#gid=…"
+          value="${esc(labConfig.oldRecipeSheet||OLD_RECIPE_SHEET_URL)}">
+      </div>
+      <div style="display:flex;gap:9px;flex-wrap:wrap;align-items:center">
+        <button class="btn btn-acc" id="cfg_import">⇩ Sync recipes now</button>
+        <span style="font-size:12px;color:var(--mute)">${(printedLog||[]).filter(e=>e.source==='sheet').length} recipe(s) already imported from a sheet · ${(printedLog||[]).length} in the log in total</span>
+      </div>
+      <div id="cfg_importres" style="margin-top:14px;font-size:13px;line-height:1.6"></div>
     </div>`;
+  document.getElementById('cfg_import').onclick=async()=>{
+    const res=document.getElementById('cfg_importres');
+    const url=document.getElementById('cfg_sheet').value.trim();
+    const btn=document.getElementById('cfg_import'); btn.innerHTML='<span class="loader"></span> Importing…';
+    res.innerHTML='';
+    try{
+      const r=await importRecipeSheet(url);
+      labConfig.oldRecipeSheet=url; try{ await saveConfig(); }catch(e){}
+      res.innerHTML=`<span style="color:#12b76a;font-weight:700">Done.</span> Tab <b>${esc(r.tab)}</b>: ${r.found} recipe(s) on the sheet —
+        <b>${r.added}</b> new, <b>${r.updated}</b> changed, <b>${r.removed}</b> removed, ${r.same} unchanged.`+
+        (r.sample.length?`<br><span style="color:var(--mute)">For example: ${r.sample.map(esc).join(', ')}</span>`:'');
+      toast((r.added||r.updated||r.removed)?'Recipe sheet synced':'Already up to date');
+    }catch(e){
+      res.innerHTML=`<span style="color:var(--warn);font-weight:700">Failed: ${esc(e.message||String(e))}</span>`;
+    }
+    btn.textContent='⇩ Sync recipes now';
+  };
   document.getElementById('cfg_save').onclick=async()=>{
     labConfig.appsScriptUrl=document.getElementById('cfg_url').value.trim();
     await saveConfig(); toast('Settings saved');
@@ -4096,10 +4228,60 @@ function allKnownRecipes(){
   });
   return uniq;
 }
+function recipeMatches(o,s){
+  if(!s)return true;
+  if((o.name||'').toLowerCase().includes(s))return true;
+  if((o.where||'').toLowerCase().includes(s))return true;
+  return (o.rec.rows||[]).some(r=>String(r.step||'').toLowerCase().includes(s)||String(r.notes||'').toLowerCase().includes(s));
+}
 function suggestRecipes(q){
   const s=(q||'').trim().toLowerCase();
   if(s.length<2)return [];
-  return allKnownRecipes().filter(o=>(o.name||'').toLowerCase().includes(s)).slice(0,8);
+  return allKnownRecipes().filter(o=>recipeMatches(o,s)).slice(0,8);
+}
+/* ---- browse every known recipe (incl. the imported old sheet) ---- */
+function toggleRecipeBrowser(){
+  const b=document.getElementById('er_browse'); if(!b)return;
+  const show=b.style.display==='none';
+  b.style.display=show?'':'none';
+  if(show){ renderRecipeBrowser(); setTimeout(()=>{const f=document.getElementById('er_bq'); if(f)f.focus();},0); }
+}
+function renderRecipeBrowser(){
+  const list=document.getElementById('er_blist'); if(!list)return;
+  const q=(document.getElementById('er_bq')||{value:''}).value.trim().toLowerCase();
+  const all=allKnownRecipes();
+  const hits=all.filter(o=>recipeMatches(o,q)).slice(0,40);
+  window._browseCache=hits;
+  if(!hits.length){list.innerHTML='<div class="empty-note" style="padding:10px">No recipes'+(q?' matching "'+esc(q)+'"':'')+'.</div>';return;}
+  list.innerHTML=hits.map((o,i)=>{
+    const steps=(o.rec.rows||[]).map(r=>r.step).filter(Boolean);
+    const when=o.when?String(o.when).slice(0,10):'';
+    return `<div class="sug" onclick="applyBrowsed(${i})"><div><b>${esc(o.name)}</b>
+        <span class="sug-w">${esc(o.where)}${when?' · '+esc(when):''}</span></div>
+      <div class="sug-s">${esc(steps.slice(0,6).join(' → '))}${steps.length>6?' →…':''}
+        <span class="sug-n">${steps.length} step(s)</span></div></div>`;
+  }).join('')+(all.length>hits.length?`<div class="empty-note" style="padding:8px">Showing ${hits.length} of ${all.filter(o=>recipeMatches(o,q)).length} — type to narrow down.</div>`:'');
+}
+function applyBrowsed(i){
+  const o=(window._browseCache||[])[i]; if(!o)return;
+  applyKnownRecipe(o);
+  const b=document.getElementById('er_browse'); if(b)b.style.display='none';
+}
+/* Fill the editor from a known recipe. Empty editor → steps replaced;
+   steps already typed → the recipe is appended after them.           */
+function applyKnownRecipe(o){
+  const rec=window._editRec;
+  const existing=(rec.rows||[]).filter(r=>String(r.step||'').trim()||String(r.time||'').trim());
+  const incoming=JSON.parse(JSON.stringify(o.rec.rows||[]));
+  rec.rows=existing.length?existing.concat(incoming):incoming;
+  rec.rows.forEach((r,i)=>r.index=i+1);
+  if(!rec.footer)rec.footer=o.rec.footer||'';
+  if(o.rec.logo&&!rec.logo)rec.logo=o.rec.logo;
+  rec.mode='chem';
+  const f=document.getElementById('er_footer'); if(f)f.value=rec.footer||'';
+  const lg=document.getElementById('er_logo'); if(lg&&rec.logo)lg.value=rec.logo;
+  setRecMode('chem'); drawRecRows();
+  toast((existing.length?'Appended ':'Filled ')+incoming.length+' step(s) from "'+(o.name||'')+'"');
 }
 function onRecNameInput(){
   const box=document.getElementById('er_suggest'); if(!box)return;
@@ -4123,16 +4305,8 @@ function onRecNameInput(){
 }
 function applySuggestion(i){
   const o=(window._sugCache||[])[i]; if(!o)return;
-  const rec=window._editRec;
-  rec.rows=JSON.parse(JSON.stringify(o.rec.rows||[]));
-  rec.footer=o.rec.footer||rec.footer;
-  if(o.rec.logo)rec.logo=o.rec.logo;
-  rec.mode='chem';
-  const f=document.getElementById('er_footer'); if(f)f.value=rec.footer||'';
-  const lg=document.getElementById('er_logo'); if(lg&&rec.logo)lg.value=rec.logo;
-  setRecMode('chem'); drawRecRows();
+  applyKnownRecipe(o);
   document.getElementById('er_suggest').style.display='none';
-  toast('Filled '+(rec.rows.length)+' step(s) from "'+(o.name||'')+'"');
 }
 function closeSuggest(){
   const b=document.getElementById('er_suggest');
@@ -4179,7 +4353,14 @@ function editRecipe(p,si){
         </div>
 
         <div id="er_chem" style="${(rec.mode||'chem')==='free'?'display:none':''}">
-          <label>Steps</label>
+          <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:4px">
+            <label style="margin:0">Steps</label>
+            <button class="btn btn-out" type="button" style="padding:5px 11px;font-size:12px" onclick="toggleRecipeBrowser()">📚 Past recipes</button>
+          </div>
+          <div id="er_browse" class="browsebox" style="display:none">
+            <input id="er_bq" placeholder="Search by sample name, project or step (e.g. NaOH, PVDF, PI_5)…" autocomplete="off" oninput="renderRecipeBrowser()">
+            <div id="er_blist" class="browselist"></div>
+          </div>
           <div class="shdr"><span></span><span>Step</span><span>Time</span><span>Unit</span><span>US</span><span>Temp</span><span></span></div>
           <div id="er_rows" ondragover="stepListDragOver(event)" ondrop="stepListDrop(event)"></div>
           <button class="btn btn-out" style="margin-top:9px;padding:7px 14px;font-size:12px" onclick="addRecRow()">+ Add step</button>
