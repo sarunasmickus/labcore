@@ -700,7 +700,7 @@
 /* ============================================================
    CONFIG  —  EDIT THESE TWO VALUES (see instructions below)
    ============================================================ */
-const LABCORE_VERSION = '2026-11-04 j';   // bump on every release
+const LABCORE_VERSION = '2026-11-04 k';   // bump on every release
 /* The one LABCORE_DATA folder everyone uses. Paste its Drive folder ID here
    (from the folder's URL: drive.google.com/drive/folders/<THIS PART>).
    When set, LabCore never searches for or creates a folder — it uses this
@@ -1340,7 +1340,7 @@ async function writeParamsExcel(p){
                'every time a sample or recipe is saved, so any changes made here will be lost. '+
                'Enter data in LabCore instead.';
   const buildSheet=(rows)=>{
-    const header=['Parameter',...(samples.length?samples.map(s=>s.label):['(no samples)'])];
+    const header=['Parameter',...(samples.length?samples.map(s=>sampleFullName(s)):['(no samples)'])];
     const groupRow=['Group',...(samples.length?samples.map(s=>sampleGroup(s)):[''])];
     const aoa=[[BANNER],[],header,groupRow];
     rows.forEach(([label,get])=>{
@@ -1362,7 +1362,7 @@ async function writeParamsExcel(p){
     if(!withRec.length)aoa.push(['(no chemical recipes recorded yet)','','','','','','','','']);
     withRec.forEach(sm=>{
       const r=sm.recipe;
-      aoa.push([sm.label,r.printedAt||'',r.recipeDateTime||'','','','','','','']);
+      aoa.push([sampleFullName(sm),r.printedAt||'',r.recipeDateTime||'','','','','','','']);
       (r.rows||[]).forEach((row,i)=>aoa.push(['','','',row.index||i+1,row.step||'',
         row.time?String(row.time)+(row.unit?' '+unitShort(row.unit):''):'',
         row.us?'US':'',row.temp||'',row.notes||'']));
@@ -1535,7 +1535,7 @@ function mergeProject(base,ours,theirs){
   out.tasks  =mergeObjects(base.tasks||[],ours.tasks||[],theirs.tasks||[],
                            t=>String(t.text||'').toLowerCase(),mergeTask);
   out.samples=mergeObjects(base.samples||[],ours.samples||[],theirs.samples||[],
-                           s=>String(s.label||'').toLowerCase(),mergeSample);
+                           s=>sampleKey(s),mergeSample);
   out.drawings=unionById(theirs.drawings,ours.drawings);
   out.excelId  =theirs.excelId||ours.excelId;
   out.excelLink=theirs.excelLink||ours.excelLink;
@@ -1973,7 +1973,7 @@ function buildRecipeSegs(rec,sampleLabel,big){
 async function printSampleRecipe(p,si,big){
   const sm=p.data.samples[si];
   if(!sm.recipe||!(sm.recipe.rows||[]).length)throw new Error('No recipe to print');
-  await sendSegs(buildRecipeSegs(sm.recipe,sm.label,big));
+  await sendSegs(buildRecipeSegs(sm.recipe,sampleFullName(sm),big));
   sm.recipe.printedAt=new Date().toISOString();
   await saveProject(p);
   try{ await recordPrintedRecipe(p,sm,sm.recipe); }
@@ -2052,7 +2052,7 @@ async function loadPrintedLog(){
 }
 async function recordPrintedRecipe(p,sm,rec){
   printedLog.push({printedAt:rec.printedAt||new Date().toISOString(),
-    project:p.data.name,sample:sm.label,recipe:JSON.parse(JSON.stringify(rec))});
+    project:p.data.name,sample:sampleFullName(sm),recipe:JSON.parse(JSON.stringify(rec))});
   printedLogId=await writeJson('printed_recipes.json',rootFolderId,printedLog,printedLogId);
   await writePrintedXlsx();
 }
@@ -3035,10 +3035,24 @@ document.getElementById('newProjectBtn').onclick=()=>{
            <input type="date" id="np_deadline">
          </div>
        </div>
-       <div class="field" style="margin-bottom:0">
+       <div class="field">
          <label>Description<span class="req">*</span></label>
          <textarea id="np_desc" rows="3" placeholder="Goal, context, what this project is for…"></textarea>
        </div>
+       <div class="two">
+         <div class="field"><label>Start date <span style="text-transform:none;letter-spacing:0;font-weight:400">(for the timeline)</span></label>
+           <input type="date" id="np_start"></div>
+         <div class="field"><label>&nbsp;</label>
+           <div style="font-size:12px;color:var(--mute);line-height:1.5;padding-top:8px">Blank = today. Start → deadline is the bar on the Timeline tab.</div></div>
+       </div>
+       <div class="field" style="margin-bottom:0"><label>Milestones <span style="text-transform:none;letter-spacing:0;font-weight:400">(report due, samples to send… — optional)</span></label>
+         <div id="ep_ms"></div>
+         <div style="display:flex;gap:7px;margin-top:6px">
+           <input type="date" id="ep_msdate" style="width:150px">
+           <input id="ep_mstext" placeholder="e.g. Send samples to partner" style="flex:1"
+             onkeydown="if(event.key==='Enter'){event.preventDefault();epAddMs()}">
+           <button class="btn btn-out" type="button" onclick="epAddMs()" style="padding:8px 14px">+</button>
+         </div></div>
        <div class="errmsg" id="err1"></div>
      </div>
 
@@ -3093,8 +3107,10 @@ document.getElementById('newProjectBtn').onclick=()=>{
    </div>`;
   window._newTasks=[];
   window._newPeople=[];
+  window._epMs=[];
   renderNewTasks();
   renderNewPeople();
+  epRenderMs();
   // live summary
   ['np_name','np_status','np_priority','np_deadline','np_desc'].forEach(id=>{
     const el=document.getElementById(id);
@@ -3139,6 +3155,8 @@ document.getElementById('newProjectBtn').onclick=()=>{
     try{
       const folderId=await createFolder('PRJ_'+name.replace(/[^\w]+/g,'_').slice(0,40),rootFolderId);
       const data={name,status,priority,deadline,description:desc,
+        start:g('np_start').value||new Date().toISOString().slice(0,10),
+        milestones:(window._epMs||[]).slice().sort((a,b)=>a.date.localeCompare(b.date)),
         people:(window._newPeople||[]).slice(),
         tasks:(window._newTasks||[]).map(t=>({text:t.text,done:false})),
         drawings:[],
@@ -3187,6 +3205,7 @@ function updateNewSummary(){
     <div class="sumrow"><span class="k">Description</span>${val(desc,desc?'✓ added':'')}</div>
     <div class="sumrow"><span class="k">People</span>${people?`<span class="v sum-ok">${people}</span>`:'<span class="v sum-miss">none</span>'}</div>
     <div class="sumrow"><span class="k">Tasks</span><span class="v">${tasks||'—'}</span></div>
+    <div class="sumrow"><span class="k">Milestones</span><span class="v">${(window._epMs||[]).length||'—'}</span></div>
     <div class="sumrow" style="border:none"><span class="k">Files</span><span class="v">${files||'—'}</span></div>`;
 }
 
@@ -3538,6 +3557,7 @@ function epAddMs(){
   document.getElementById('ep_mstext').value=''; epRenderMs();
 }
 function epRenderMs(){
+  if(typeof updateNewSummary==='function')updateNewSummary();
   const el=document.getElementById('ep_ms'); if(!el)return;
   window._epMs.sort((a,b)=>a.date.localeCompare(b.date));
   const ms=window._epMs;
@@ -3849,6 +3869,22 @@ async function checkProjectFreshness(){
 /* ---------- SAMPLES as tiles with parameter bubbles ---------- */
 /* A sample's group: explicit group if set, otherwise its material. */
 function sampleGroup(sm){ return (sm.group||sm.material||'').trim()||'Ungrouped'; }
+/* Sample names only need to be unique inside their group, so outside the
+   group context (popup titles, Excel, printouts, lists) a sample is shown
+   as "Group / Name". */
+function sampleFullName(sm){
+  const g=sampleGroup(sm);
+  return g!=='Ungrouped'?g+' / '+(sm.label||''):(sm.label||'');
+}
+/* identity = the group it is shown under + its name (unique inside a group) */
+function sampleKey(sm){ return sampleGroup(sm).toLowerCase()+'|'+String(sm.label||'').trim().toLowerCase(); }
+/* every material ever used, across all projects — for suggestions */
+function allMaterials(){
+  const set=new Map();
+  projects.forEach(p=>(p.data.samples||[]).forEach(sm=>{
+    const m=(sm.material||'').trim(); if(m&&!set.has(m.toLowerCase()))set.set(m.toLowerCase(),m); }));
+  return [...set.values()].sort((a,b)=>a.localeCompare(b));
+}
 function projectGroups(p){
   const map=new Map();
   (p.data.samples||[]).forEach(sm=>{ const g=sampleGroup(sm); if(!map.has(g.toLowerCase()))map.set(g.toLowerCase(),g); });
@@ -4004,7 +4040,7 @@ function fmtStamp(v){
 
 /* ---- edit / create a recipe in LabCore (same structure as the printer) ---- */
 function blankRecipe(sm){
-  return {printedAt:'',sampleName:sm.label||'',recipeDateTime:nowStamp(),
+  return {printedAt:'',sampleName:sampleFullName(sm)||'',recipeDateTime:nowStamp(),
           mode:'chem',logo:'',footer:'',rows:[]};
 }
 function nowStamp(){
@@ -4041,8 +4077,8 @@ function allKnownRecipes(){
   const out=[];
   projects.forEach(pr=>(pr.data.samples||[]).forEach(sm=>{
     if(sm.recipe&&(sm.recipe.rows||[]).length)
-      out.push({rec:sm.recipe,name:sm.recipe.sampleName||sm.label,
-                where:pr.data.name+' · '+sm.label,
+      out.push({rec:sm.recipe,name:sm.recipe.sampleName||sampleFullName(sm),
+                where:pr.data.name+' · '+sampleFullName(sm),
                 when:sm.recipe.printedAt||sm.recipe.recipeDateTime||''});
   }));
   (printedLog||[]).forEach(e=>{
@@ -4116,7 +4152,7 @@ function editRecipe(p,si){
   const days=Array.from({length:31},(_,i)=>i+1);
   const years=Array.from({length:6},(_,i)=>thisYear-2+i);
 
-  openModal(`<span class="tag chem">RECIPE</span> ${esc(sm.label)}`,`
+  openModal(`<span class="tag chem">RECIPE</span> ${esc(sampleFullName(sm))}`,`
     <div class="recedit">
       <div class="recedit-main">
 
@@ -4124,7 +4160,7 @@ function editRecipe(p,si){
           <div class="field" style="position:relative">
             <label>Sample name (printed)
               <span style="text-transform:none;letter-spacing:0;font-weight:400">— type 2+ letters to reuse a past recipe</span></label>
-            <input id="er_name" autocomplete="off" value="${esc(rec.sampleName||sm.label)}"
+            <input id="er_name" autocomplete="off" value="${esc(rec.sampleName||sampleFullName(sm))}"
               oninput="onRecNameInput()" onfocus="onRecNameInput()" onblur="closeSuggest()">
             <div id="er_suggest" class="sugbox" style="display:none"></div>
           </div>
@@ -4331,7 +4367,7 @@ async function saveRecipe(p,si,alsoPrint){
   const sm=p.data.samples[si];
   const rec=window._editRec;
   rec.recipeDateTime=recDateFromSelects();
-  rec.sampleName=document.getElementById('er_name').value.trim()||sm.label;
+  rec.sampleName=document.getElementById('er_name').value.trim()||sampleFullName(sm);
   rec.footer=document.getElementById('er_footer').value.trim();
   rec.logo=(document.getElementById('er_logo')||{}).value||'';
   rec.freeText=(document.getElementById('er_ft')||{}).value||'';
@@ -4367,7 +4403,7 @@ async function saveRecipe(p,si,alsoPrint){
 async function pickRecipe(p,si,queryOverride){
   const sm=p.data.samples[si];
   const q=queryOverride!==undefined?queryOverride:sm.label;
-  openModal(`<span class="tag chem">RECIPE</span> Attach printed recipe to ${esc(sm.label)}`,
+  openModal(`<span class="tag chem">RECIPE</span> Attach printed recipe to ${esc(sampleFullName(sm))}`,
     `<div style="display:flex;gap:8px;margin-bottom:14px">
        <input id="rq" value="${esc(q)}" placeholder="Search by printed sample name" style="flex:1">
        <button class="btn btn-out" id="rqgo">Search</button>
@@ -4422,7 +4458,7 @@ function detachRecipe(p,si){
   const sm=p.data.samples[si];
   const n=(sm.recipe&&sm.recipe.rows?sm.recipe.rows.length:0);
   askConfirm('Remove recipe?',
-    `This removes the chemical recipe (${n} step${n===1?'':'s'}) from sample "${sm.label}". `+
+    `This removes the chemical recipe (${n} step${n===1?'':'s'}) from sample "${sampleFullName(sm)}". `+
     `The sample and its files are not affected, and any printed copy stays in the master log. `+
     `This cannot be undone.`,
     'Remove recipe',
@@ -4445,12 +4481,14 @@ async function saveDetailsEdit(p,si){
   const sm=p.data.samples[si];
   const label=(document.getElementById('sd_label').value||'').trim();
   if(!label){toast('Sample name cannot be empty',true);return;}
-  if(p.data.samples.some((x,i)=>i!==si&&(x.label||'').toLowerCase()===label.toLowerCase())){
-    toast('Another sample already uses that name',true);return;}
+  const newGroup=(document.getElementById('sd_group')||{value:''}).value.trim();
+  const newMaterial=document.getElementById('sd_material').value.trim();
+  if(p.data.samples.some((x,i)=>i!==si&&sampleKey(x)===sampleKey({label,group:newGroup,material:newMaterial}))){
+    toast('Another sample in that group already uses that name',true);return;}
   const oldLabel=sm.label, oldGroup=(sm.group||'').trim();
   sm.label=label;
-  sm.material=document.getElementById('sd_material').value.trim();
-  sm.group=(document.getElementById('sd_group')||{value:''}).value.trim();
+  sm.material=newMaterial;
+  sm.group=newGroup;
   try{
     await withSaving('Saving sample…', async()=>{
       const fid=await locateSampleFolder(p,{label:oldLabel,group:oldGroup,folderId:sm.folderId});
@@ -4475,7 +4513,8 @@ function sampleHeadHtml(sm,si){
           <div class="field" style="margin:0"><label>Sample name</label>
             <input id="sd_label" value="${esc(sm.label||'')}"></div>
           <div class="field" style="margin:0"><label>Material</label>
-            <input id="sd_material" value="${esc(sm.material||'')}" placeholder="e.g. Ti-6Al-4V"></div>
+            <input id="sd_material" list="sd_materials" value="${esc(sm.material||'')}" placeholder="e.g. Ti-6Al-4V">
+            <datalist id="sd_materials">${allMaterials().map(m=>`<option value="${esc(m)}">`).join('')}</datalist></div>
           <div class="field" style="margin:0"><label>Group</label>
             <input id="sd_group" list="sd_groups" value="${esc(sm.group||'')}" placeholder="= material">
             <datalist id="sd_groups">${projectGroups(projects[selectedProjectIndex]).filter(g=>g!=='Ungrouped').map(g=>`<option value="${esc(g)}">`).join('')}</datalist></div>
@@ -4512,7 +4551,7 @@ function copyParamsDialog(p,si,what){
   const title=what==='laser'?'Apply laser parameters to…':'Apply recipe to…';
   openModal(`<span class="tag ${what==='laser'?'laser':'chem'}">${what==='laser'?'LASER':'RECIPE'}</span> ${esc(title)}`,`
     <p style="color:var(--mute);font-size:13px;line-height:1.6;margin-bottom:12px">
-      Copies <b>${esc(src.label)}</b>'s ${what==='laser'?'laser parameters':'recipe'} to the samples you tick.
+      Copies <b>${esc(sampleFullName(src))}</b>'s ${what==='laser'?'laser parameters':'recipe'} to the samples you tick.
       Their existing ${what==='laser'?'parameters':'recipe'} will be replaced.</p>
     <div style="display:flex;gap:8px;margin-bottom:10px;flex-wrap:wrap">
       <button class="btn btn-out" style="padding:6px 11px;font-size:12px" onclick="cpSel(true)">All</button>
@@ -4540,7 +4579,7 @@ function copyParamsDialog(p,si,what){
       await withSaving('Applying to '+idx.length+' sample(s)…',async()=>{
         idx.forEach(i=>{ const t=p.data.samples[i];
           if(what==='laser'){ t.laser=JSON.parse(JSON.stringify(src.laser||{})); }
-          else { t.recipe=JSON.parse(JSON.stringify(src.recipe)); t.recipe.printedAt=''; t.recipe.sampleName=t.label; t.recipe.recipeDateTime=nowStamp(); }
+          else { t.recipe=JSON.parse(JSON.stringify(src.recipe)); t.recipe.printedAt=''; t.recipe.sampleName=sampleFullName(t); t.recipe.recipeDateTime=nowStamp(); }
         });
         await saveProject(p); await writeParamsExcel(p);
       });
@@ -4677,7 +4716,7 @@ function showSample(p,si){
     </div>`
     :'<div class="empty-note" style="padding:14px">No photos or files uploaded for this sample yet.</div>';
 
-  openModal(`<span class="tag file">SAMPLE</span> ${esc(sm.label)}`,
+  openModal(`<span class="tag file">SAMPLE</span> ${esc(sampleFullName(sm))}`,
     sampleHeadHtml(sm,si)+
     `<div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:10px">
        <h3 style="font-size:12px;letter-spacing:1.3px;text-transform:uppercase;margin:0">
@@ -4880,13 +4919,13 @@ function showParams(p,si,which){
            ${hasValues(sm.laser)?`<button class="btn btn-out" onclick="copyParamsDialog(projects[selectedProjectIndex],${si},'laser')">⇶ Apply to others</button>`:''}
            <button class="btn btn-out" onclick="showSample(projects[selectedProjectIndex],${si})">View all</button>
          </div>`);
-  openModal(`<span class="tag laser">LASER</span> ${esc(sm.label)}`,body,laserEditing);
+  openModal(`<span class="tag laser">LASER</span> ${esc(sampleFullName(sm))}`,body,laserEditing);
 }
 
 /* modal: the sample's chemical recipe */
 function showRecipe(p,si){
   const sm=p.data.samples[si];
-  openModal(`<span class="tag chem">RECIPE</span> ${esc(sm.label)}`,
+  openModal(`<span class="tag chem">RECIPE</span> ${esc(sampleFullName(sm))}`,
     recipeTableHtml(sm.recipe)+legacyChemHtml(sm)+
     `<div style="display:flex;gap:9px;margin-top:16px;flex-wrap:wrap">
        <button class="btn btn-acc" style="flex:1" onclick="editRecipe(projects[selectedProjectIndex],${si})">
@@ -4925,7 +4964,7 @@ function showFiles(p,si){
     if(changed&&document.getElementById('gal_'+si)){renderGallery(p,si);renderSamples(p);}
   });
   const sm=p.data.samples[si];
-  openModal(`<span class="tag file">FILES</span> ${esc(sm.label)}`,`
+  openModal(`<span class="tag file">FILES</span> ${esc(sampleFullName(sm))}`,`
     <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
       <input type="file" id="fileIn_${si}" multiple style="flex:1;min-width:200px">
       <select id="fileType_${si}" style="width:auto">
@@ -4990,22 +5029,29 @@ async function doUpload(p,si){
    the sample's own buttons, so creating a sample stays quick.        */
 function newSampleForm(p,presetGroup){
   const groups=projectGroups(p).filter(g=>g!=='Ungrouped');
+  const preset=(presetGroup&&presetGroup!=='Ungrouped')?presetGroup:'';
   const samplesByNew=(p.data.samples||[]).map((sm,si)=>({sm,si}))
     .sort((a,b)=>(Date.parse(b.sm.created||0)||b.si)-(Date.parse(a.sm.created||0)||a.si));
   const copyOpts=samplesByNew.map(({sm,si})=>{
     const has=[hasValues(sm.laser)?'L':'',(sm.recipe&&(sm.recipe.rows||[]).length)?'R':''].filter(Boolean).join('+');
-    return `<option value="${si}">${esc(sm.label)}${has?' · '+has:''}${sm.material?' · '+esc(sm.material):''}</option>`;
+    return `<option value="${si}">${esc(sampleFullName(sm))}${has?' · '+has:''}${sm.material?' · '+esc(sm.material):''}</option>`;
   }).join('');
+  const groupOpts=`<option value="">— no group —</option>`+
+    groups.map(g=>`<option value="${esc(g)}"${g===preset?' selected':''}>${esc(g)}</option>`).join('')+
+    `<option value="__new__">+ New group…</option>`;
   openModal('<span class="tag laser">NEW SAMPLE</span> '+esc(p.data.name),`
+    <div class="field"><label>1 · Group<span class="req">*</span> <span style="text-transform:none;letter-spacing:0;font-weight:400">(pick an existing one or make a new one)</span></label>
+      <div style="display:flex;gap:8px">
+        <select id="ns_groupsel" style="flex:1">${groupOpts}</select>
+        <input id="ns_group" placeholder="New group name, e.g. Batch A, PVDF, control…" style="flex:1;display:none">
+      </div></div>
     <div class="two">
-      <div class="field"><label>Sample label<span class="req">*</span></label>
-        <input id="ns_label" placeholder="S-01" autofocus></div>
-      <div class="field"><label>Material</label>
-        <input id="ns_material" placeholder="Ti-6Al-4V"></div>
+      <div class="field"><label>2 · Sample name<span class="req">*</span></label>
+        <input id="ns_label" placeholder="S-01"></div>
+      <div class="field"><label>3 · Material</label>
+        <input id="ns_material" list="ns_materials" placeholder="Ti-6Al-4V" autocomplete="off">
+        <datalist id="ns_materials">${allMaterials().map(m=>`<option value="${esc(m)}">`).join('')}</datalist></div>
     </div>
-    <div class="field"><label>Group <span style="text-transform:none;letter-spacing:0;font-weight:400">(blank = same as material)</span></label>
-      <input id="ns_group" list="ns_groups" placeholder="e.g. Batch A, PVDF, control…" value="${esc(presetGroup&&presetGroup!=='Ungrouped'?presetGroup:'')}">
-      <datalist id="ns_groups">${groups.map(g=>`<option value="${esc(g)}">`).join('')}</datalist></div>
     ${copyOpts?`<div class="field"><label>Copy parameters from</label>
       <div style="display:flex;gap:8px;align-items:center">
         <select id="ns_copy" style="flex:1"><option value="">— start empty —</option>${copyOpts}</select>
@@ -5024,36 +5070,53 @@ function newSampleForm(p,presetGroup){
     <div class="errmsg" id="ns_err"></div>`);
   stageClear('nsFiles');
   stageInit('nsFiles','ns_files','ns_filelist');
-  // picking a source sample pre-fills the material (and group, if empty)
+  const gsel=document.getElementById('ns_groupsel'), ginp=document.getElementById('ns_group');
+  const chosenGroup=()=>gsel.value==='__new__'?ginp.value.trim():gsel.value;
+  gsel.onchange=()=>{
+    const isNew=gsel.value==='__new__';
+    ginp.style.display=isNew?'':'none';
+    if(isNew)ginp.focus(); else document.getElementById('ns_label').focus();
+  };
+  // nothing to choose from yet → go straight to "new group"
+  if(!groups.length){ gsel.value='__new__'; gsel.onchange(); }
+  else if(preset){ gsel.value=preset; setTimeout(()=>document.getElementById('ns_label').focus(),0); }
+  else setTimeout(()=>gsel.focus(),0);
+  ginp.onkeydown=e=>{ if(e.key==='Enter'){e.preventDefault();document.getElementById('ns_label').focus();} };
+  // picking a source sample pre-fills the material
   const cp=document.getElementById('ns_copy');
   if(cp)cp.onchange=()=>{ const src=p.data.samples[Number(cp.value)]; if(!src)return;
-    const mat=document.getElementById('ns_material'); if(!mat.value)mat.value=src.material||'';
-    const grp=document.getElementById('ns_group'); if(!grp.value&&src.group)grp.value=src.group; };
+    const mat=document.getElementById('ns_material'); if(!mat.value)mat.value=src.material||''; };
   document.getElementById('ns_label').onkeydown=e=>{
+    if(e.key==='Enter'){e.preventDefault();document.getElementById('ns_material').focus();} };
+  document.getElementById('ns_material').onkeydown=e=>{
     if(e.key==='Enter'){e.preventDefault();document.getElementById('ns_save').click();} };
   document.getElementById('ns_save').onclick=async()=>{
     const label=document.getElementById('ns_label').value.trim();
+    const group=chosenGroup();
     const err=document.getElementById('ns_err');
-    if(!label){err.textContent='A sample label is required.';err.classList.add('show');return;}
-    if(p.data.samples.some(x=>(x.label||'').toLowerCase()===label.toLowerCase())){
-      err.textContent='A sample with that label already exists in this project.';
-      err.classList.add('show');return;}
+    const fail=t=>{err.textContent=t;err.classList.add('show');};
+    if(gsel.value==='__new__'&&!group){fail('Type a name for the new group (or pick an existing one).');return;}
+    if(!label){fail('A sample name is required.');return;}
+    const material=document.getElementById('ns_material').value.trim();
+    if(p.data.samples.some(x=>sampleKey(x)===sampleKey({label,group,material}))){
+      const eff=sampleGroup({label,group,material});
+      fail(eff!=='Ungrouped'?`"${label}" already exists in group "${eff}". The same name is fine in a different group.`
+                            :`"${label}" already exists among the samples without a group.`);
+      return;}
     const btn=document.getElementById('ns_save');btn.innerHTML='<span class="loader"></span> Adding…';
     try{
-      const sm={label,material:document.getElementById('ns_material').value.trim(),
-                group:document.getElementById('ns_group').value.trim(),
-                laser:{},files:[],created:new Date().toISOString()};
+      const sm={label,material,group,laser:{},files:[],created:new Date().toISOString()};
       const src=cp&&cp.value!==''?p.data.samples[Number(cp.value)]:null;
       if(src&&!document.getElementById('ns_copyL').checked&&!document.getElementById('ns_copyR').checked){
-        err.textContent='Tick laser and/or recipe to copy from '+src.label+', or set "Copy parameters from" back to empty.';
-        err.classList.add('show'); btn.textContent='Add sample'; return;
+        fail('Tick laser and/or recipe to copy from '+sampleFullName(src)+', or set "Copy parameters from" back to empty.');
+        btn.textContent='Add sample'; return;
       }
       if(src){
         if(document.getElementById('ns_copyL').checked&&src.laser)sm.laser=JSON.parse(JSON.stringify(src.laser));
         if(document.getElementById('ns_copyR').checked&&src.recipe){
           sm.recipe=JSON.parse(JSON.stringify(src.recipe));
           sm.recipe.printedAt='';                       // a copy has not been printed
-          sm.recipe.sampleName=label;                   // printout carries the new name
+          sm.recipe.sampleName=sampleFullName(sm);      // printout carries the new name
           sm.recipe.recipeDateTime=nowStamp();
         }
       }
@@ -5065,12 +5128,12 @@ function newSampleForm(p,presetGroup){
                        link:r.webViewLink,thumb:r.thumbnailLink});
       }
       p.data.samples.push(sm);
+      collapsedGroups[p.folderId+'|'+sampleGroup(sm).toLowerCase()]=false;   // show the group it landed in
       await saveProject(p); await writeParamsExcel(p);
       closeModal(); renderProject();
-      toast('Sample '+label+' added'+(src?' (copied from '+src.label+')':''));
+      toast('Sample '+sampleFullName(sm)+' added'+(src?' (copied from '+sampleFullName(src)+')':''));
     }catch(e){
-      err.textContent='Could not add the sample: '+(e.message||e);
-      err.classList.add('show'); btn.textContent='Add sample';
+      fail('Could not add the sample: '+(e.message||e)); btn.textContent='Add sample';
     }
   };
 }
