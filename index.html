@@ -637,12 +637,12 @@
 /* ============================================================
    CONFIG  —  EDIT THESE TWO VALUES (see instructions below)
    ============================================================ */
-const LABCORE_VERSION = '2026-11-04 b';   // bump on every release
+const LABCORE_VERSION = '2026-11-04 c';   // bump on every release
 /* The one LABCORE_DATA folder everyone uses. Paste its Drive folder ID here
    (from the folder's URL: drive.google.com/drive/folders/<THIS PART>).
    When set, LabCore never searches for or creates a folder — it uses this
    one or refuses to start. Leave empty only while first setting up.      */
-const PINNED_ROOT_ID = '1eTIriBi649H1f9yFITiQmwvfBXw044X9';
+const PINNED_ROOT_ID = '1eTIriBi649H1f9yFITiQmwvfBXw044X9';   // lab LABCORE_DATA (laboratorijarobotika3d@gmail.com)
 const CLIENT_ID = '37123387397-g5k9795fvsfi0dltsd1lqq8fc3bojtm1.apps.googleusercontent.com';
 const API_KEY   = 'AIzaSyCkMyUEfhT507soedXVuzT7_hzRQdEyVNs';
 /* ============================================================ */
@@ -879,6 +879,7 @@ async function retryLoad(){
 async function ensureRootFolder(){
   // 1. pinned folder (the normal case once set up)
   if(PINNED_ROOT_ID){
+    try{ localStorage.removeItem('labcore_root'); }catch(e){}
     try{
       const chk=await gapi.client.drive.files.get({fileId:PINNED_ROOT_ID,
         fields:'id,name,trashed,owners(emailAddress),capabilities(canEdit)'});
@@ -1464,6 +1465,19 @@ function deadlineInfo(dateStr){
    Searches the whole Drive for project.json files, works out which top-level
    folder each one sits under, and lets you switch the app to that folder. */
 async function scanDrive(){
+  if(PINNED_ROOT_ID){
+    document.getElementById('mainView').innerHTML=`
+      <div class="tilebar"><h2>Drive folder</h2></div>
+      <div class="panelbox">
+        <p style="line-height:1.7">LabCore is <b>pinned</b> to the lab folder and cannot be switched from here.</p>
+        <div class="row"><span class="k">Folder</span><span class="v"><code>${esc(rootFolderId)}</code></span></div>
+        <div class="row"><span class="k">Owner</span><span class="v">${esc(rootOwner||'—')}</span></div>
+        <div class="row"><span class="k">You are signed in as</span><span class="v">${esc(signedInEmail||'—')}</span></div>
+        <button class="btn btn-out" style="margin-top:14px"
+          onclick="window.open('https://drive.google.com/drive/folders/${esc(rootFolderId)}','_blank')">📁 Open in Drive</button>
+      </div>`;
+    return;
+  }
   document.getElementById('mainView').innerHTML=
     `<div class="tilebar"><h2>Find my projects</h2></div>
      <div class="panelbox"><span class="loader"></span> Scanning your Drive…</div>`;
@@ -3390,7 +3404,24 @@ async function uploadDrawings(p){
   btn.textContent='Add';
 }
 
+/* A project may only be written if its folder lives directly inside the
+   pinned LABCORE_DATA. This makes writing to any other Drive impossible,
+   whatever stale ids a browser may still hold. */
+const parentCache={};
+async function assertInsideRoot(folderId){
+  if(!folderId)throw new Error('Project has no folder');
+  if(parentCache[folderId]===rootFolderId)return;
+  const r=await gapi.client.drive.files.get({fileId:folderId,fields:'id,parents,trashed'});
+  const parents=(r.result&&r.result.parents)||[];
+  if(r.result&&r.result.trashed)throw new Error('This project folder is in the Drive bin.');
+  if(!parents.includes(rootFolderId)){
+    throw new Error('Refusing to save: this project is not inside the lab LABCORE_DATA folder. '+
+      'It belongs to a different Drive. Move or recreate it in the lab folder.');
+  }
+  parentCache[folderId]=rootFolderId;
+}
 async function saveProject(p){
+  await assertInsideRoot(p.folderId);
   // did somebody else write this project while we had it open?
   let mt=null;
   try{ mt=await remoteMtime(p.jsonId); }catch(e){ /* offline check — just save */ }
