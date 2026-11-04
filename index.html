@@ -409,6 +409,15 @@
   .chipx{position:absolute;right:6px;top:50%;transform:translateY(-50%);color:var(--mute);font-size:13px;line-height:1}
   .chipx:hover{color:var(--ink)}
 
+  .reminder{display:flex;justify-content:space-between;align-items:center;gap:14px;flex-wrap:wrap;
+    background:#fff8e6;border:1px solid #f7c76b;border-radius:12px;padding:11px 14px;margin-bottom:14px;font-size:13px}
+  .hist-e{border:1px solid var(--line);border-radius:10px;padding:10px 12px;margin-bottom:9px;background:#fff}
+  .hist-h{display:flex;gap:10px;align-items:center;font-size:13px;margin-bottom:6px;flex-wrap:wrap}
+  .hist-h span{color:var(--mute);font-size:12px}
+  .hist-c{font-size:12px;padding:3px 0;border-top:1px dashed var(--line);display:flex;gap:8px;flex-wrap:wrap;align-items:baseline}
+  .hist-c .mono{color:var(--mute);min-width:180px}
+  .hist-from{color:#b42318;text-decoration:line-through}
+  .hist-to{color:#067647;font-weight:600}
   .browsebox{border:1px solid var(--line);border-radius:10px;padding:10px;margin-bottom:10px;background:var(--panel2)}
   .browsebox input{margin-bottom:8px}
   .browselist{max-height:260px;overflow:auto;background:#fff;border:1px solid var(--line);border-radius:8px}
@@ -703,7 +712,7 @@
 /* ============================================================
    CONFIG  —  EDIT THESE TWO VALUES (see instructions below)
    ============================================================ */
-const LABCORE_VERSION = '2026-11-04 m';   // bump on every release
+const LABCORE_VERSION = '2026-11-04 o';   // bump on every release
 /* The one LABCORE_DATA folder everyone uses. Paste its Drive folder ID here
    (from the folder's URL: drive.google.com/drive/folders/<THIS PART>).
    When set, LabCore never searches for or creates a folder — it uses this
@@ -912,7 +921,9 @@ async function onConnected(){
     await loadProjects();
     goProjects();
     startProjectPolling();                       // always land on the board when done
+    if(duplicateNotices.length)toast('Duplicate project files found in: '+duplicateNotices.join(', ')+' — copies kept in _BACKUP/conflicts',true);
     autoSyncRecipeSheet();                       // in the background, if a sheet link is saved
+    dailyBackup();                               // first visitor of the day snapshots everything
   }catch(e){
     console.error('[LABCORE] load failed',e);
     document.getElementById('mainView').innerHTML=
@@ -1009,6 +1020,10 @@ async function createFolder(name,parentId){
 }
 /* write/update a JSON file via multipart upload */
 async function writeJson(name,parentId,obj,existingId){
+  return (await writeJsonMeta(name,parentId,obj,existingId)).id;
+}
+/* same, but returns {id, headRevisionId, modifiedTime} of the write */
+async function writeJsonMeta(name,parentId,obj,existingId){
   // Never create a second file with the same name in the same folder.
   // If the caller lost track of the id, look it up before deciding to POST.
   if(!existingId){
@@ -1025,10 +1040,10 @@ async function writeJson(name,parentId,obj,existingId){
   const path=existingId?`/upload/drive/v3/files/${existingId}`:'/upload/drive/v3/files';
   const r=await gapi.client.request({
     path,method:existingId?'PATCH':'POST',
-    params:{uploadType:'multipart'},
+    params:{uploadType:'multipart',fields:'id,headRevisionId,modifiedTime'},
     headers:{'Content-Type':`multipart/related; boundary=${boundary}`},
     body});
-  return r.result.id;
+  return {id:r.result.id,headRevisionId:r.result.headRevisionId||null,modifiedTime:r.result.modifiedTime||null};
 }
 async function readJson(fileId){
   const r=await gapi.client.drive.files.get({fileId,alt:'media'});
@@ -1391,8 +1406,9 @@ async function writeParamsExcel(p){
 }
 
 /* ---------- Projects ---------- */
+let duplicateNotices=[];
 async function loadProjects(){
-  projects=[];
+  projects=[]; duplicateNotices=[];
   let folders=[],pageToken=null,skipped=0;
   // page through every project folder
   do{
@@ -1414,15 +1430,24 @@ async function loadProjects(){
         q:`'${folder.id}' in parents and name='project.json' and trashed=false`,
         fields:'files(id,modifiedTime)',pageSize:100});
       if(!jr.result.files.length)return null;      // not a project folder
-      // several copies can exist from an earlier bug: read the newest, trash the rest
+      // several copies can exist (an old bug, or two people creating the file
+      // at once): read the newest, keep the others in _BACKUP/conflicts
       let files=jr.result.files.slice()
         .sort((a,b)=>new Date(b.modifiedTime)-new Date(a.modifiedTime));
       if(files.length>1){
-        for(const f of files.slice(1)){
-          try{ await gapi.client.drive.files.update({fileId:f.id,resource:{trashed:true}}); }
-          catch(e){}
-        }
-        console.log(`[LABCORE] cleaned ${files.length-1} duplicate project.json in ${folder.name}`);
+        let moved=0;
+        try{
+          const cdir=await backupFolder('conflicts');
+          for(const f of files.slice(1)){
+            try{
+              await gapi.client.drive.files.update({fileId:f.id,addParents:cdir,removeParents:folder.id,
+                resource:{name:`${folder.name} project.conflict-${String(f.modifiedTime).replace(/[:]/g,'-')}.json`}});
+              moved++;
+            }catch(e){ console.warn('[LABCORE] could not move duplicate',f.id,e); }
+          }
+        }catch(e){ console.warn('[LABCORE] conflicts folder unavailable',e); }
+        console.warn(`[LABCORE] ${folder.name}: ${files.length-1} duplicate project.json → _BACKUP/conflicts (${moved} moved)`);
+        duplicateNotices.push(folder.name);
       }
       const jsonId=files[0].id;
       let data=await readJson(jsonId);
@@ -1454,6 +1479,19 @@ async function loadProjects(){
 }
 
 /* fill in defaults so projects written by older versions still work */
+/* ids: random for new records; deterministic for records that predate ids,
+   so every browser derives the same id for the same old record */
+function newId(){ return Date.now().toString(36)+Math.random().toString(36).slice(2,8); }
+const idSlug=x=>String(x||'').toLowerCase().replace(/[^a-z0-9]+/g,'-').slice(0,60);
+function ensureIds(data){
+  (data.samples||[]).forEach(sm=>{
+    if(!sm.id)sm.id='s_'+idSlug(sm.created)+'_'+idSlug(sm.label);
+    if(sm.recipe&&Array.isArray(sm.recipe.rows))sm.recipe.rows.forEach((r,i)=>{ if(!r.id)r.id='r_'+(i+1); });
+  });
+  (data.milestones||[]).forEach(m=>{ if(!m.id)m.id='m_'+idSlug(m.date)+'_'+idSlug(m.text); });
+  (data.tasks||[]).forEach(t=>{ if(!t.id)t.id='t_'+idSlug(t.text); });
+  return data;
+}
 function normalizeProjectData(data,folderName){
   data.name=data.name||(folderName||'').replace(/^PRJ_/,'').replace(/_/g,' ');
   data.status=data.status||'active';
@@ -1466,9 +1504,10 @@ function normalizeProjectData(data,folderName){
   data.tasks=Array.isArray(data.tasks)?data.tasks.map(t=>{
     if(typeof t==='string')return {text:t,done:false};
     if(t.who&&!data.people.some(x=>x.toLowerCase()===t.who.toLowerCase()))data.people.push(t.who);
-    return {text:t.text||'',done:!!t.done};
+    return {id:t.id,text:t.text||'',done:!!t.done};
   }):[];
-  return data;
+  data.milestones=Array.isArray(data.milestones)?data.milestones:[];
+  return ensureIds(data);
 }
 
 /* ================= CONCURRENT EDITING =================
@@ -1478,6 +1517,17 @@ function normalizeProjectData(data,folderName){
    sets of changes survive instead of one overwriting the other.        */
 const same=(a,b)=>JSON.stringify(a)===JSON.stringify(b);
 const pick=(base,ours,theirs)=>same(ours,base)?theirs:ours;   // we changed it? keep ours
+/* While mergeProject runs, every field that BOTH sides changed to different
+   values is noted here (ours is kept). saveProject writes them to the
+   history and shows them, so a lost value is never silent.            */
+let mergeLog=null, pendingConflicts=[];
+const shortVal=v=>{ const t=typeof v==='object'&&v!==null?JSON.stringify(v):String(v===undefined?'':v); return t.length>80?t.slice(0,77)+'…':t; };
+function pickAt(k,base,ours,theirs){
+  if(mergeLog&&!same(ours,base)&&!same(theirs,base)&&!same(ours,theirs))
+    mergeLog.conflicts.push({path:[...mergeLog.path,k].join('.').replace(/\.\[/g,'['),ours:shortVal(ours),theirs:shortVal(theirs)});
+  return pick(base,ours,theirs);
+}
+function withPath(label,fn){ if(mergeLog)mergeLog.path.push(label); try{ return fn(); } finally{ if(mergeLog)mergeLog.path.pop(); } }
 
 /* merge a list of plain strings (people) */
 function mergeStrings(base,ours,theirs,keyOf){
@@ -1489,7 +1539,7 @@ function mergeStrings(base,ours,theirs,keyOf){
   return out;
 }
 /* merge a list of objects identified by a key, merging items present in both */
-function mergeObjects(base,ours,theirs,keyOf,mergeItem){
+function mergeObjects(base,ours,theirs,keyOf,mergeItem,labelOf){
   const find=(arr,key)=>arr.find(x=>keyOf(x)===key);
   const removedByUs=base.filter(b=>!find(ours,keyOf(b))).map(keyOf);
   const out=[];
@@ -1497,7 +1547,7 @@ function mergeObjects(base,ours,theirs,keyOf,mergeItem){
     const key=keyOf(t);
     if(removedByUs.includes(key))return;                 // we deleted it
     const o=find(ours,key), b=find(base,key);
-    out.push(o&&b ? mergeItem(b,o,t) : (o||t));
+    out.push(o&&b ? withPath(labelOf?labelOf(o):String(key),()=>mergeItem(b,o,t)) : (o||t));
   });
   ours.forEach(o=>{ if(!find(theirs,keyOf(o))&&!find(base,keyOf(o)))out.push(o); });  // we added it
   return out;
@@ -1509,41 +1559,273 @@ const unionById=(a,b)=>{
 };
 function mergeMilestone(b,o,t){
   return {...t,...o,
-    done:pick(b.done,o.done,t.done), doneAt:pick(b.doneAt,o.doneAt,t.doneAt),
+    date:pickAt('date',b.date,o.date,t.date), text:pickAt('text',b.text,o.text,t.text),
+    done:pickAt('done',b.done,o.done,t.done), doneAt:pick(b.doneAt,o.doneAt,t.doneAt),
     folderId:o.folderId||t.folderId, files:unionById(t.files,o.files)};
 }
 function mergeTask(b,o,t){
-  return {text:o.text||t.text, done:pick(b.done,o.done,t.done)};
+  return {id:o.id||t.id||b.id, text:pickAt('text',b.text,o.text,t.text), done:pickAt('done',b.done,o.done,t.done)};
+}
+/* field-by-field 3-way merge of plain parameter objects (laser, chem,
+   laser.lines…): A changing power and B changing speed at the same time
+   both survive. Only the same field edited by both is "last save wins". */
+function mergeFields(b,o,t,label){
+  const isO=x=>x&&typeof x==='object'&&!Array.isArray(x);
+  if(!isO(o)||!isO(t))return label!==undefined?pickAt(label,b,o,t):pick(b,o,t);
+  b=isO(b)?b:{};
+  const out={};
+  const body=()=>{
+    new Set([...Object.keys(b),...Object.keys(o),...Object.keys(t)]).forEach(k=>{
+      const v=(isO(o[k])&&isO(t[k]))?mergeFields(b[k],o[k],t[k],k):pickAt(k,b[k],o[k],t[k]);
+      if(v!==undefined)out[k]=v;
+    });
+  };
+  if(label!==undefined)withPath(label,body); else body();
+  return out;
+}
+/* recipes: scalar fields merge per field, steps merge row by row */
+function mergeRecipe(b,o,t){
+  if(!o||!t||!b)return pickAt('recipe',b,o,t);
+  return withPath('recipe',()=>{
+    const out=mergeFields({...b,rows:undefined},{...o,rows:undefined},{...t,rows:undefined});
+    // steps are matched by their permanent id (old recipes: by position)
+    const tag=rows=>(rows||[]).map((r,i)=>({...r,_k:r.id||('pos'+i)}));
+    out.rows=mergeObjects(tag(b.rows),tag(o.rows),tag(t.rows),r=>r._k,
+        (bb,oo,tt)=>mergeFields(bb,oo,tt),r=>'step '+((r.index)||'')+' '+(r.step||''))
+      .map((r,i)=>{ const c={...r}; delete c._k; c.index=i+1; return c; });
+    return out;
+  });
 }
 function mergeSample(b,o,t){
   return {
-    label:pick(b.label,o.label,t.label),
-    material:pick(b.material,o.material,t.material),
-    group:pick(b.group,o.group,t.group),
+    id:o.id||t.id||b.id,
+    label:pickAt('label',b.label,o.label,t.label),
+    material:pickAt('material',b.material,o.material,t.material),
+    group:pickAt('group',b.group,o.group,t.group),
     created:o.created||t.created,
     folderId:o.folderId||t.folderId,
-    laser:pick(b.laser,o.laser,t.laser),
-    recipe:pick(b.recipe,o.recipe,t.recipe),
-    chem:pick(b.chem,o.chem,t.chem),
+    laser:mergeFields(b.laser,o.laser,t.laser,'laser'),
+    recipe:mergeRecipe(b.recipe,o.recipe,t.recipe),
+    chem:mergeFields(b.chem,o.chem,t.chem,'chem'),
     files:unionById(t.files,o.files)
   };
 }
 function mergeProject(base,ours,theirs){
   const out=JSON.parse(JSON.stringify(theirs));
+  mergeLog={conflicts:[],path:[]};
   ['name','status','priority','deadline','description','start'].forEach(k=>{
-    out[k]=pick(base[k],ours[k],theirs[k]);
+    out[k]=pickAt(k,base[k],ours[k],theirs[k]);
   });
+  // records are matched by their permanent id (old records: by name)
   out.milestones=mergeObjects(base.milestones||[],ours.milestones||[],theirs.milestones||[],
-                           m=>String(m.date||'')+'|'+String(m.text||'').toLowerCase(),mergeMilestone);
+                           m=>m.id||String(m.date||'')+'|'+String(m.text||'').toLowerCase(),mergeMilestone,
+                           m=>'milestones['+(m.date||'')+' '+(m.text||'')+']');
   out.people =mergeStrings(base.people||[],ours.people||[],theirs.people||[],x=>String(x).toLowerCase());
   out.tasks  =mergeObjects(base.tasks||[],ours.tasks||[],theirs.tasks||[],
-                           t=>String(t.text||'').toLowerCase(),mergeTask);
+                           t=>t.id||String(t.text||'').toLowerCase(),mergeTask,t=>'tasks['+(t.text||'')+']');
   out.samples=mergeObjects(base.samples||[],ours.samples||[],theirs.samples||[],
-                           s=>sampleKey(s),mergeSample);
+                           s=>s.id||sampleKey(s),mergeSample,s=>'samples['+sampleFullName(s)+']');
+  const conflicts=mergeLog.conflicts; mergeLog=null;
+  if(conflicts.length){
+    pendingConflicts.push(...conflicts);
+    toast('Both of you changed: '+conflicts.slice(0,3).map(c=>c.path).join(', ')+(conflicts.length>3?' +'+(conflicts.length-3)+' more':'')+' — your value kept, theirs noted in History',true);
+  }
   out.drawings=unionById(theirs.drawings,ours.drawings);
   out.excelId  =theirs.excelId||ours.excelId;
   out.excelLink=theirs.excelLink||ours.excelLink;
   return out;
+}
+/* ============ _BACKUP — everything LabCore keeps for safety ============
+   LABCORE_DATA/_BACKUP/
+     history/    one json per project: who changed what, and when
+     snapshots/  <date>/ daily copies of every project.json + the logs
+     conflicts/  duplicate project.json files found in a project folder
+   Nobody needs to open it; LabCore runs fine without it.              */
+const BACKUP_NAME='_BACKUP';
+const backupP={};                                // sub-folder name -> promise of id
+function backupFolder(sub){
+  if(!backupP.root)backupP.root=ensureSubfolder(BACKUP_NAME,rootFolderId).catch(e=>{delete backupP.root;throw e;});
+  if(!sub)return backupP.root;
+  if(!backupP[sub])backupP[sub]=backupP.root.then(r=>ensureSubfolder(sub,r)).catch(e=>{delete backupP[sub];throw e;});
+  return backupP[sub];
+}
+async function copyDriveFile(fileId,name,parentId){
+  const r=await gapi.client.drive.files.copy({fileId,resource:{name,parents:[parentId]},fields:'id'});
+  return r.result.id;
+}
+
+/* ---- change history: a readable diff of every save ---- */
+const HISTORY_SKIP=new Set(['id','folderId','link','thumb','jsonId','excelId','excelLink','base','mtime','key','source','historyId']);
+function flattenForHistory(o,path,out){
+  if(o===null||o===undefined){out[path]='';return out;}
+  if(Array.isArray(o)){
+    if(!o.length){out[path]='';return out;}
+    if(o[0]&&typeof o[0]==='object'){
+      const used={};
+      o.forEach((it,i)=>{
+        let k;
+        if(it.label!==undefined)k=sampleFullName(it);
+        else if(it.date!==undefined&&it.text!==undefined)k=it.date+' '+it.text;
+        else if(it.text!==undefined)k=it.text;
+        else if(it.name!==undefined)k=it.name;
+        else k=String(i+1);
+        k=String(k); if(used[k]){used[k]++;k+=' #'+used[k];}else used[k]=1;
+        flattenForHistory(it,path+'['+k+']',out);
+      });
+    }else out[path]=o.map(x=>String(x)).join(', ');
+    return out;
+  }
+  if(typeof o==='object'){
+    Object.keys(o).forEach(k=>{
+      if(HISTORY_SKIP.has(k))return;
+      const p=path?path+'.'+k:k;
+      if(k==='files'||k==='drawings'){out[p]=(o[k]||[]).length+' file(s)';return;}
+      flattenForHistory(o[k],p,out);
+    });
+    return out;
+  }
+  out[path]=String(o); return out;
+}
+function diffProject(a,b){
+  const fa=flattenForHistory(a||{},'',{}), fb=flattenForHistory(b||{},'',{});
+  const ch=[];
+  new Set([...Object.keys(fa),...Object.keys(fb)]).forEach(k=>{
+    const x=fa[k]===undefined?'':fa[k], y=fb[k]===undefined?'':fb[k];
+    if(x!==y)ch.push({path:k,from:x,to:y});
+  });
+  return ch;
+}
+/* _BACKUP/history/<project folder id>/<user>.json — one file per person per
+   project, so two people saving at once never rewrite each other's log  */
+const historyDirP={};
+function historyDir(p){
+  if(!historyDirP[p.folderId])historyDirP[p.folderId]=backupFolder('history').then(h=>ensureSubfolder(p.folderId,h)).catch(e=>{delete historyDirP[p.folderId];throw e;});
+  return historyDirP[p.folderId];
+}
+const historyFileName=()=>sampleFolderName(signedInEmail||'unknown')+'.json';
+async function appendHistory(p,prev,next,conflicts){
+  try{
+    const changes=diffProject(prev,next);
+    if(!changes.length&&!(conflicts&&conflicts.length))return;
+    const dir=await historyDir(p);
+    const fname=historyFileName();
+    if(!p.historyId)p.historyId=await findFile(fname,dir);
+    let h=null;
+    if(p.historyId){ try{ h=await readJson(p.historyId); if(typeof h==='string')h=JSON.parse(h); }catch(e){ h=null; } }
+    if(!h||typeof h!=='object'||!Array.isArray(h.entries))h={project:p.data.name,folderId:p.folderId,by:signedInEmail||'',entries:[]};
+    h.project=p.data.name;
+    const entry={at:new Date().toISOString(),by:signedInEmail||'',changes:changes.slice(0,300)};
+    if(conflicts&&conflicts.length)entry.conflicts=conflicts.slice(0,100);
+    h.entries.push(entry);
+    if(h.entries.length>3000)h.entries=h.entries.slice(-3000);
+    p.historyId=await writeJson(fname,dir,h,p.historyId);
+  }catch(e){ console.warn('[LABCORE] history not written',e); }
+}
+async function showHistory(p){
+  openModal(`<span class="tag file">HISTORY</span> ${esc(p.data.name)}`,
+    `<div id="hist_body"><span class="loader"></span> Loading from _BACKUP/history…</div>`,true);
+  const el=document.getElementById('hist_body');
+  try{
+    const hroot=await backupFolder('history');
+    let entries=[];
+    const readAll=async id=>{ try{ let h=await readJson(id); if(typeof h==='string')h=JSON.parse(h); if(h&&Array.isArray(h.entries))entries=entries.concat(h.entries); }catch(e){} };
+    const dir=await findSubfolder(p.folderId,hroot);
+    if(dir){ for(const f of await listFolderFiles(dir))await readAll(f.id); }
+    const legacy=await findFile(p.folderId+'.json',hroot);      // single-file history from an earlier version
+    if(legacy)await readAll(legacy);
+    entries.sort((a,b)=>new Date(b.at)-new Date(a.at));
+    if(!entries.length){el.innerHTML='<div class="empty-note" style="padding:14px">No changes recorded yet. History starts with the first save made with this version.</div>';return;}
+    el.innerHTML=`<p style="color:var(--mute);font-size:12px;margin-bottom:12px">${entries.length} save(s) recorded · newest first · kept in <code>_BACKUP/history</code></p>`+
+      entries.slice(0,300).map(e=>`<div class="hist-e">
+        <div class="hist-h"><b>${esc(fmtStamp(e.at))}</b> <span>${esc(e.by||'unknown')}</span> <span class="mono" style="color:var(--mute)">${(e.changes||[]).length} change(s)</span>
+          ${(e.conflicts||[]).length?`<span style="color:#b42318;font-weight:700">⚠ ${e.conflicts.length} conflict(s)</span>`:''}</div>
+        ${(e.conflicts||[]).map(c=>`<div class="hist-c" style="background:#fdeceb;border-radius:6px;padding:4px 6px"><span class="mono">${esc(c.path)}</span>
+          kept <span class="hist-to">${esc(c.ours||'—')}</span> · discarded other user's <span class="hist-from">${esc(c.theirs||'—')}</span></div>`).join('')}
+        ${(e.changes||[]).slice(0,60).map(c=>`<div class="hist-c"><span class="mono">${esc(c.path)}</span>
+          <span class="hist-from">${esc(c.from||'—')}</span> → <span class="hist-to">${esc(c.to||'—')}</span></div>`).join('')}
+        ${(e.changes||[]).length>60?`<div class="hist-c" style="color:var(--mute)">… ${e.changes.length-60} more</div>`:''}
+      </div>`).join('');
+  }catch(e){ el.innerHTML=`<div class="errmsg show">Could not load history: ${esc(e.message||String(e))}</div>`; }
+}
+
+/* ---- daily snapshot of every project.json + logs (first visitor of the day) ---- */
+async function dailyBackup(force){
+  try{
+    const day=new Date().toISOString().slice(0,10);
+    if(!force){ try{ if(localStorage.getItem('labcore_backup')===day)return; }catch(e){} }
+    const snaps=await backupFolder('snapshots');
+    const mark=()=>{ try{ localStorage.setItem('labcore_backup',day); }catch(e){} };
+    if(await findSubfolder(day,snaps)){ mark(); return; }
+    const dir=await createFolder(day,snaps);
+    let n=0;
+    for(const p of projects){ try{ await copyDriveFile(p.jsonId,sampleFolderName(p.data.name||'project')+'.json',dir); n++; }catch(e){} }
+    for(const name of ['printed_recipes.json','labcore_config.json','logos.json']){
+      try{ const id=await findFile(name,rootFolderId); if(id)await copyDriveFile(id,name,dir); }catch(e){}
+    }
+    // keep 60 days; older snapshot folders go to the Drive trash (recoverable for 30 more days)
+    const cutoff=new Date(Date.now()-60*86400000).toISOString().slice(0,10);
+    const r=await gapi.client.drive.files.list({q:`'${snaps}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false`,fields:'files(id,name)',pageSize:1000});
+    for(const f of r.result.files||[]){
+      if(/^\d{4}-\d{2}-\d{2}$/.test(f.name)&&f.name<cutoff){ try{ await gapi.client.drive.files.update({fileId:f.id,resource:{trashed:true}}); }catch(e){} }
+    }
+    mark(); console.log('[LABCORE] daily backup',day,n,'project(s)');
+  }catch(e){ console.warn('[LABCORE] daily backup skipped',e); }
+}
+/* ---- one zip with every JSON record, for an off-Drive copy ---- */
+async function downloadAllData(btn){
+  const label=btn?btn.textContent:''; if(btn){btn.disabled=true;btn.innerHTML='<span class="loader"></span> Packing…';}
+  try{
+    if(!window.JSZip)await new Promise((res,rej)=>{const sc=document.createElement('script');
+      sc.src='https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js';sc.onload=res;sc.onerror=()=>rej(new Error('could not load the zip library'));document.head.appendChild(sc);});
+    const zip=new JSZip(); const day=new Date().toISOString().slice(0,10);
+    projects.forEach(p=>zip.file('projects/'+sampleFolderName(p.data.name||'project')+'.json',JSON.stringify(p.data,null,2)));
+    zip.file('printed_recipes.json',JSON.stringify(printedLog||[],null,2));
+    zip.file('labcore_config.json',JSON.stringify(labConfig||{},null,2));
+    zip.file('logos.json',JSON.stringify(labLogos||[],null,2));
+    zip.file('README.txt',`LabCore data export ${day}\nAll structured records (projects, samples, parameters, recipes, milestones, tasks).\nPhotos and other files stay in the Drive folders.\n`);
+    const blob=await zip.generateAsync({type:'blob'});
+    const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download='labcore-data-'+day+'.zip'; a.click();
+    setTimeout(()=>URL.revokeObjectURL(a.href),10000);
+    labConfig.lastZipBackup=new Date().toISOString(); labConfig.lastZipBackupBy=signedInEmail||'';
+    try{ await saveConfig(); }catch(e){}
+    const b=document.getElementById('backupReminder'); if(b)b.remove();
+    toast('Backup downloaded — next reminder in a month');
+  }catch(e){ toast('Export failed: '+(e.message||e),true); }
+  if(btn){btn.disabled=false;btn.textContent=label;}
+}
+
+/* ---- monthly reminder to download the zip (shared date, so whoever does it
+   clears it for everyone; "later" snoozes a week on this browser only) ---- */
+const BACKUP_EVERY_DAYS=30;
+function backupDaysAgo(){
+  if(!labConfig.lastZipBackup)return null;
+  return Math.floor((Date.now()-new Date(labConfig.lastZipBackup))/86400000);
+}
+function backupReminderHtml(){
+  const ago=backupDaysAgo();
+  if(ago!==null&&ago<BACKUP_EVERY_DAYS)return '';
+  try{ if(Number(localStorage.getItem('labcore_backup_snooze')||0)>Date.now())return ''; }catch(e){}
+  return `<div class="reminder" id="backupReminder">
+    <span>💾 <b>Monthly backup:</b> ${ago===null?'no off-Drive backup has been downloaded yet':'the last downloaded backup is '+ago+' days old'}.
+      Download the zip and keep it somewhere outside Google Drive.</span>
+    <span style="display:flex;gap:7px;flex-wrap:wrap">
+      <button class="btn btn-acc" style="padding:7px 12px;font-size:12px" onclick="downloadAllData(this)">⬇ Download now</button>
+      <button class="btn btn-out" style="padding:7px 12px;font-size:12px" onclick="try{localStorage.setItem('labcore_backup_snooze',Date.now()+7*86400000)}catch(e){};document.getElementById('backupReminder').remove()">Remind me in a week</button>
+    </span></div>`;
+}
+/* ---- post-save check: did another save slip in between our freshness
+   check and our write? Drive keeps revisions, so we can see it. ---- */
+async function slippedRevision(fileId,ourRevId,knownMtime){
+  if(!knownMtime||!ourRevId)return null;
+  const rv=await gapi.client.drive.revisions.list({fileId,fields:'revisions(id,modifiedTime)',pageSize:1000});
+  const revs=(rv.result.revisions||[]).slice().sort((a,b)=>new Date(a.modifiedTime)-new Date(b.modifiedTime));
+  const idx=revs.findIndex(r=>r.id===ourRevId);
+  if(idx<1)return null;                        // ours not listed (or first ever): nothing we can tell
+  const prev=revs[idx-1];                      // the revision right before OURS — later ones belong to
+  if(new Date(prev.modifiedTime)<=new Date(knownMtime))return null;   // people who will merge us in
+  const r=await gapi.client.drive.revisions.get({fileId,revisionId:prev.id,alt:'media'});
+  let d=r.result; if(typeof d==='string')d=JSON.parse(d);
+  return {data:normalizeProjectData(d,''),at:prev.modifiedTime};
 }
 async function remoteMtime(fileId){
   const r=await gapi.client.drive.files.get({fileId,fields:'modifiedTime'});
@@ -1557,6 +1839,12 @@ async function fetchProjectData(jsonId){
 
 /* escape text for safe HTML insertion */
 function esc(s){return (s||'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
+/* a URL that may come from a JSON file in Drive: only http(s) (or an inline
+   image) is allowed into href/src, everything else is dropped */
+function safeUrl(u){
+  u=String(u||'').trim();
+  return (/^https?:\/\//i.test(u)||/^data:image\//i.test(u))?esc(u):'';
+}
 
 /* ---------- Deadline helpers (date only, no time) ---------- */
 /* days remaining: negative = overdue, 0 = today */
@@ -2106,7 +2394,7 @@ async function importRecipeSheet(url){
   const r=await gapi.client.sheets.spreadsheets.values.get({spreadsheetId:id,
     range:`'${tab.title.replace(/'/g,"''")}'!A:J`,valueRenderOption:'UNFORMATTED_VALUE',dateTimeRenderOption:'SERIAL_NUMBER'});
   const recipes=parseRecipeSheet(r.result.values||[]);
-  if(!printedLogId&&!printedLog.length)await loadPrintedLog();
+  await loadPrintedLog();                        // always start from what is on Drive
   // The sheet is the source of truth for its own recipes: everything that
   // came from this sheet is rebuilt from it, so edits and deletions made in
   // the sheet flow through. Recipes LabCore printed itself are untouched.
@@ -2144,6 +2432,7 @@ async function autoSyncRecipeSheet(){
   }catch(e){ console.warn('[LABCORE] recipe sheet sync skipped:',e.message||e); }
 }
 async function recordPrintedRecipe(p,sm,rec){
+  await loadPrintedLog();                        // someone else may have printed meanwhile
   printedLog.push({printedAt:rec.printedAt||new Date().toISOString(),
     project:p.data.name,sample:sampleFullName(sm),recipe:JSON.parse(JSON.stringify(rec))});
   printedLogId=await writeJson('printed_recipes.json',rootFolderId,printedLog,printedLogId);
@@ -2468,7 +2757,7 @@ function renderLogoGrid(){
   g.innerHTML='';
   labLogos.forEach(l=>{
     const c=document.createElement('div'); c.className='lcard';
-    c.innerHTML=`<img src="${l.prev}" alt="">
+    c.innerHTML=`<img src="${safeUrl(l.prev)}" alt="">
       <div class="ln">${esc(l.name)}</div>
       <div class="lmeta">${l.w}×${l.h}</div>
       <button class="ld" title="Delete">✕</button>`;
@@ -2744,24 +3033,35 @@ async function attLoad(month){
 }
 function attCol(i){ let s=''; i++; while(i>0){ const r=(i-1)%26; s=String.fromCharCode(65+r)+s; i=Math.floor((i-1)/26); } return s; }
 /* write only the cells that changed */
+let attRetries=0;
 async function attFlush(){
   const keys=Object.keys(attDirty); if(!keys.length)return;
+  const snapshot={...attDirty};                  // edits stay queued until Sheets confirms
   const data=keys.map(k=>{
     const [ds,person]=k.split('|'); const d=Number(ds.slice(-2));
     const ci=attPeople.findIndex(p=>p.toLowerCase()===person);
-    return {range:`'${attMonth}'!${attCol(ci+1)}${d+1}`,values:[[attDirty[k]]]};
+    return {range:`'${attMonth}'!${attCol(ci+1)}${d+1}`,values:[[snapshot[k]]]};
   });
-  attDirty={};
   await gapi.client.sheets.spreadsheets.values.batchUpdate({spreadsheetId:attId,
     resource:{valueInputOption:'RAW',data}});
+  keys.forEach(k=>{ if(attDirty[k]===snapshot[k])delete attDirty[k]; });   // newer edits of a cell stay queued
+  attRetries=0;
   const meta=await gapi.client.drive.files.get({fileId:attId,fields:'modifiedTime'});
   attLoadedRev=meta.result.modifiedTime;
-  setAttState('ok','Saved');
+  setAttState(Object.keys(attDirty).length?'busy':'ok',Object.keys(attDirty).length?'Saving…':'Saved');
+  if(Object.keys(attDirty).length)attQueue();
 }
-function attQueue(){
+function attQueue(delay){
   setAttState('busy','Saving…'); clearTimeout(attSaveTimer);
-  attSaveTimer=setTimeout(()=>attFlush().catch(e=>{setAttState('err','Save failed');toast('Could not save: '+(e.message||e),true);}),900);
+  attSaveTimer=setTimeout(()=>attFlush().catch(e=>{
+    attRetries++;
+    if(attRetries<=5){ setAttState('err','Save failed — retrying…'); attQueue(4000*attRetries); }
+    else { setAttState('err','NOT saved — check the connection and change a cell again'); toast('Attendance could not be saved: '+(e.message||e),true); }
+  }),delay||900);
 }
+window.addEventListener('beforeunload',e=>{
+  if(savingBusy||Object.keys(attDirty||{}).length){ e.preventDefault(); e.returnValue=''; }
+});
 function setAttState(kind,text){
   const el=document.getElementById('att_state'); if(!el)return;
   el.className='syncstate '+kind;
@@ -2926,6 +3226,24 @@ function renderSettings(){
         <span style="font-size:12px;color:var(--mute)">${(printedLog||[]).filter(e=>e.source==='sheet').length} recipe(s) already imported from a sheet · ${(printedLog||[]).length} in the log in total</span>
       </div>
       <div id="cfg_importres" style="margin-top:14px;font-size:13px;line-height:1.6"></div>
+    </div>
+
+    <div class="panelbox" style="max-width:760px;margin-top:18px">
+      <div class="panel-head"><h3><span class="tag file">SAFETY</span> Backups &amp; history</h3></div>
+      <p style="color:var(--mute);font-size:13px;line-height:1.6;margin-bottom:14px">
+        Everything LabCore keeps for safety lives in <code>LABCORE_DATA/_BACKUP</code> — nobody needs to open it:
+        <b>snapshots/</b> a copy of every project file made once a day by the first person who opens LabCore (60 days kept),
+        <b>history/</b> who changed what and when (the 🕘 History button on each project),
+        <b>conflicts/</b> duplicate project files, kept instead of deleted.
+        For a copy outside Google Drive, download the zip below now and then.
+      </p>
+      <p style="font-size:13px;margin-bottom:10px">Last downloaded backup: <b>${labConfig.lastZipBackup?esc(fmtStamp(labConfig.lastZipBackup))+(labConfig.lastZipBackupBy?' by '+esc(labConfig.lastZipBackupBy):''):'never'}</b>
+        — LabCore reminds everyone on the Projects page when it is older than ${BACKUP_EVERY_DAYS} days.</p>
+      <div style="display:flex;gap:9px;flex-wrap:wrap;align-items:center">
+        <button class="btn btn-blue" onclick="downloadAllData(this)">⬇ Download all data (zip)</button>
+        <button class="btn btn-out" onclick="dailyBackup(true).then(()=>toast('Snapshot checked — see _BACKUP/snapshots'))">Snapshot now</button>
+        <button class="btn btn-out" onclick="backupFolder().then(id=>window.open('https://drive.google.com/drive/folders/'+id,'_blank'))">📁 Open _BACKUP</button>
+      </div>
     </div>`;
   document.getElementById('cfg_import').onclick=async()=>{
     const res=document.getElementById('cfg_importres');
@@ -2970,6 +3288,7 @@ function renderHome(){
   ['active','done','archived'].forEach(s=>counts[s]=projects.filter(p=>(p.data.status||'active')===s).length);
 
   document.getElementById('mainView').innerHTML=`
+    ${backupReminderHtml()}
     <div class="tilebar">
       <h2>Projects</h2>
       <div class="filterbar">
@@ -3290,7 +3609,7 @@ document.getElementById('newProjectBtn').onclick=()=>{
         start:g('np_start').value||new Date().toISOString().slice(0,10),
         milestones:(window._epMs||[]).slice().sort((a,b)=>a.date.localeCompare(b.date)),
         people:(window._newPeople||[]).slice(),
-        tasks:(window._newTasks||[]).map(t=>({text:t.text,done:false})),
+        tasks:(window._newTasks||[]).map(t=>({id:newId(),text:t.text,done:false})),
         drawings:[],
         created:new Date().toISOString(),samples:[]};
       // upload any drawings into a Drawings subfolder
@@ -3306,6 +3625,9 @@ document.getElementById('newProjectBtn').onclick=()=>{
       const p={jsonId,folderId,data};
       await writeParamsExcel(p);                 // create empty parameters.xlsx
       await writeJson('project.json',folderId,data,jsonId); // save excel id back
+      p.base=JSON.parse(JSON.stringify(data));
+      try{ p.mtime=await remoteMtime(jsonId); }catch(e){}
+      appendHistory(p,{},data);                  // "created" entry, in the background
       projects.unshift(p);
       selectedProjectIndex=0;activeNav='projects';renderNav();renderProject();
       toast('Project created');
@@ -3407,6 +3729,7 @@ function renderProject(){
         ${people.length?`<span title="${esc(people.join(', '))}" style="cursor:default">${bubblesHtml(people,6)}</span>`:''}
       </div>
       <div style="display:flex;gap:9px;flex-wrap:wrap">
+        <button class="btn btn-out" onclick="showHistory(projects[selectedProjectIndex])" title="Who changed what, and when">🕘 History</button>
         <button class="btn btn-out" id="editProjectBtn">✎ Edit project</button>
         <button class="btn btn-acc" id="addSampleBtn">+ Add Sample</button>
       </div>
@@ -3685,7 +4008,7 @@ function closeModal(){
 function epAddMs(){
   const dt=document.getElementById('ep_msdate').value, tx=document.getElementById('ep_mstext').value.trim();
   if(!dt||!tx){toast('Milestone needs a date and a text',true);return;}
-  window._epMs.push({date:dt,text:tx,done:false});
+  window._epMs.push({id:newId(),date:dt,text:tx,done:false});
   document.getElementById('ep_mstext').value=''; epRenderMs();
 }
 function epRenderMs(){
@@ -3816,7 +4139,7 @@ async function addProjectTask(){
   const inp=document.getElementById('pj_taskinput');
   const v=inp.value.trim();if(!v)return;
   p.data.tasks=p.data.tasks||[];
-  p.data.tasks.push({text:v,done:false});
+  p.data.tasks.push({id:newId(),text:v,done:false});
   inp.value='';inp.focus();
   await saveProject(p);renderProjectTasks(p);
 }
@@ -3869,8 +4192,8 @@ function renderDrawings(p){
   g.innerHTML='';
   dr.forEach(f=>{
     const d=document.createElement('div');d.className='fcard';
-    d.innerHTML=`${f.thumb?`<img src="${f.thumb}" referrerpolicy="no-referrer" onerror="this.style.display='none'">`:''}
-      <div class="fmeta"><div class="ftype">DRAWING</div><a href="${f.link}" target="_blank">${esc(f.name)}</a></div>`;
+    d.innerHTML=`${f.thumb?`<img src="${safeUrl(f.thumb)}" referrerpolicy="no-referrer" onerror="this.style.display='none'">`:''}
+      <div class="fmeta"><div class="ftype">DRAWING</div><a href="${safeUrl(f.link)}" target="_blank">${esc(f.name)}</a></div>`;
     g.appendChild(d);
   });
 }
@@ -3920,21 +4243,40 @@ async function assertInsideRoot(folderId){
 async function saveProject(p){
   await assertInsideRoot(p.folderId);
   // did somebody else write this project while we had it open?
-  let mt=null;
+  let mt=null, checked=p.base;              // checked = what Drive held when we looked
   try{ mt=await remoteMtime(p.jsonId); }catch(e){ /* offline check — just save */ }
   if(mt && p.mtime && mt!==p.mtime){
     try{
       const theirs=await fetchProjectData(p.jsonId);
-      const base=p.base||theirs;
-      p.data=mergeProject(base,p.data,theirs);
+      p.data=mergeProject(p.base||theirs,p.data,theirs);
+      checked=theirs;
       toast('Merged with changes from another user');
     }catch(e){
       console.warn('[LABCORE] merge failed, keeping local copy',e);
     }
   }
-  p.jsonId=await writeJson('project.json',p.folderId,p.data,p.jsonId);
+  let prev=JSON.parse(JSON.stringify(checked||p.data));     // for the history diff
+  let w=await writeJsonMeta('project.json',p.folderId,p.data,p.jsonId);
+  p.jsonId=w.id;
+  // Drive has no atomic compare-and-swap, so look at the revision list:
+  // if someone saved between our check and our write, merge their version
+  // in and save once more instead of silently overwriting it.
+  try{
+    const slipped=await slippedRevision(p.jsonId,w.headRevisionId,mt||p.mtime);
+    if(slipped){
+      p.data=mergeProject(checked||slipped.data,p.data,slipped.data);
+      prev=JSON.parse(JSON.stringify(slipped.data));          // history shows only our own changes
+      w=await writeJsonMeta('project.json',p.folderId,p.data,p.jsonId);
+      toast('Recovered a change another user saved at the same moment');
+    }
+  }catch(e){ console.warn('[LABCORE] post-save check skipped',e); }
   p.base=JSON.parse(JSON.stringify(p.data));
-  try{ p.mtime=await remoteMtime(p.jsonId); }catch(e){ p.mtime=null; }
+  // our own write's timestamp — never a later one, so a save that lands
+  // right after ours is still seen as "changed" by the next poll and save
+  p.mtime=w.modifiedTime||null;
+  if(!p.mtime){ try{ p.mtime=await remoteMtime(p.jsonId); }catch(e){ p.mtime=null; } }
+  const conflicts=pendingConflicts.splice(0);
+  await appendHistory(p,prev,p.data,conflicts);
 }
 
 /* ---- projects deleted in Drive disappear from LabCore ----
@@ -4272,7 +4614,7 @@ function applyBrowsed(i){
 function applyKnownRecipe(o){
   const rec=window._editRec;
   const existing=(rec.rows||[]).filter(r=>String(r.step||'').trim()||String(r.time||'').trim());
-  const incoming=JSON.parse(JSON.stringify(o.rec.rows||[]));
+  const incoming=JSON.parse(JSON.stringify(o.rec.rows||[])).map(r=>({...r,id:newId()}));
   rec.rows=existing.length?existing.concat(incoming):incoming;
   rec.rows.forEach((r,i)=>r.index=i+1);
   if(!rec.footer)rec.footer=o.rec.footer||'';
@@ -4414,7 +4756,7 @@ function editRecipe(p,si){
       </div>
     </div>`,true);
 
-  if(!rec.rows.length&&(rec.mode||'chem')!=='free')rec.rows.push({step:'',time:'',unit:'min',us:false,temp:'',notes:''});
+  if(!rec.rows.length&&(rec.mode||'chem')!=='free')rec.rows.push({id:newId(),step:'',time:'',unit:'min',us:false,temp:'',notes:''});
   drawRecRows(); renderPresetTiles();
 }
 function setRecMode(m){
@@ -4457,13 +4799,13 @@ async function addCustomPreset(){
   inp.value=''; renderPresetTiles(); await saveConfig(); toast('Tile added');
 }
 function quickAddStep(name){
-  window._editRec.rows.push({step:name,time:'',
+  window._editRec.rows.push({id:newId(),step:name,time:'',
     unit:(name.trim().toUpperCase()==='H2O')?'s':'min',us:false,temp:'',notes:''});
   if(window._editRec.mode==='free')setRecMode('chem');
   drawRecRows();
 }
 function addRecRow(){
-  window._editRec.rows.push({step:'',time:'',unit:'min',us:false,temp:'',notes:''});
+  window._editRec.rows.push({id:newId(),step:'',time:'',unit:'min',us:false,temp:'',notes:''});
   drawRecRows();
   const rows=document.querySelectorAll('#er_rows .srow');
   const last=rows[rows.length-1]; if(last)last.querySelector('.ci').focus();
@@ -4521,7 +4863,7 @@ function stepListDrop(ev){
   const data=ev.dataTransfer.getData('text/plain')||'';
   if(data.startsWith('__preset__')){
     const nm=data.slice(10);
-    window._editRec.rows.push({step:nm,time:'',
+    window._editRec.rows.push({id:newId(),step:nm,time:'',
       unit:(nm.trim().toUpperCase()==='H2O')?'s':'min',us:false,temp:'',notes:''});
     drawRecRows();
   }
@@ -4535,7 +4877,7 @@ function importPastedSteps(){
     const parts=line.split(/\t|\s{2,}/).map(x=>x.trim()).filter(Boolean);
     if(!parts.length)return;
     const tv=splitTimeValue(parts[1]||'');
-    window._editRec.rows.push({step:parts[0],time:tv.num,unit:tv.unit,
+    window._editRec.rows.push({id:newId(),step:parts[0],time:tv.num,unit:tv.unit,
       us:false,temp:'',notes:parts.slice(2).join(' ')});
     n++;
   });
@@ -4557,12 +4899,12 @@ async function saveRecipe(p,si,alsoPrint){
     if(!rec.freeText.trim()){toast('Enter the instructions',true);return;}
     rec.rows=rec.freeText.split('\n').filter(l=>l.trim()).map((l,i)=>{
       const parts=l.split(/\t|\s{2,}/).map(x=>x.trim()).filter(Boolean);
-      return {index:i+1,step:parts[0]||l.trim(),time:parts[1]||'',unit:'',
+      return {id:'r_'+(i+1),index:i+1,step:parts[0]||l.trim(),time:parts[1]||'',unit:'',
               us:false,temp:'',notes:parts.slice(2).join(' ')};
     });
   }else{
     rec.rows=rec.rows.filter(r=>(r.step||'').trim()).map((r,i)=>({
-      index:i+1,step:r.step,time:r.time||'',unit:r.unit||'min',
+      id:r.id||newId(),index:i+1,step:r.step,time:r.time||'',unit:r.unit||'min',
       us:!!r.us,temp:r.temp||'',notes:r.notes||''}));
     if(!rec.rows.length){toast('Add at least one step',true);return;}
   }
@@ -4890,9 +5232,9 @@ function showSample(p,si){
     <div class="gallery" style="margin-top:4px">
       ${files.map(f=>`
         <div class="fcard">
-          ${f.thumb?`<img src="${f.thumb}" referrerpolicy="no-referrer" onerror="this.style.display='none'">`:''}
+          ${f.thumb?`<img src="${safeUrl(f.thumb)}" referrerpolicy="no-referrer" onerror="this.style.display='none'">`:''}
           <div class="fmeta"><div class="ftype">${esc((f.type||'file').toUpperCase())}</div>
-          <a href="${f.link}" target="_blank">${esc(f.name)}</a></div>
+          <a href="${safeUrl(f.link)}" target="_blank">${esc(f.name)}</a></div>
         </div>`).join('')}
     </div>`
     :'<div class="empty-note" style="padding:14px">No photos or files uploaded for this sample yet.</div>';
@@ -5033,9 +5375,9 @@ function renderMilestoneGallery(pi,mi){
   g.innerHTML='';
   files.forEach(f=>{
     const d=document.createElement('div');d.className='fcard';
-    d.innerHTML=`${f.thumb?`<img src="${f.thumb}" referrerpolicy="no-referrer" onerror="this.style.display='none'">`:''}
+    d.innerHTML=`${f.thumb?`<img src="${safeUrl(f.thumb)}" referrerpolicy="no-referrer" onerror="this.style.display='none'">`:''}
       <div class="fmeta"><div class="ftype">${esc((f.type||'file').toUpperCase())}</div>
-      <a href="${f.link}" target="_blank">${esc(f.name)}</a></div>`;
+      <a href="${safeUrl(f.link)}" target="_blank">${esc(f.name)}</a></div>`;
     g.appendChild(d);
   });
 }
@@ -5172,9 +5514,9 @@ function renderGallery(p,si){
   s.files.forEach(f=>{
     const d=document.createElement('div');d.className='fcard';
     const isImg=f.type==='photo';
-    d.innerHTML=`${isImg&&f.thumb?`<img src="${f.thumb}" referrerpolicy="no-referrer" onerror="this.style.display='none'">`:''}
-      <div class="fmeta"><div class="ftype">${f.type.toUpperCase()}</div>
-      <a href="${f.link}" target="_blank">${esc(f.name)}</a></div>`;
+    d.innerHTML=`${isImg&&f.thumb?`<img src="${safeUrl(f.thumb)}" referrerpolicy="no-referrer" onerror="this.style.display='none'">`:''}
+      <div class="fmeta"><div class="ftype">${esc(String(f.type||'file').toUpperCase())}</div>
+      <a href="${safeUrl(f.link)}" target="_blank">${esc(f.name)}</a></div>`;
     g.appendChild(d);
   });
 }
@@ -5286,7 +5628,7 @@ function newSampleForm(p,presetGroup){
       return;}
     const btn=document.getElementById('ns_save');btn.innerHTML='<span class="loader"></span> Adding…';
     try{
-      const sm={label,material,group,laser:{},files:[],created:new Date().toISOString()};
+      const sm={id:newId(),label,material,group,laser:{},files:[],created:new Date().toISOString()};
       const src=cp&&cp.value!==''?p.data.samples[Number(cp.value)]:null;
       if(src&&!document.getElementById('ns_copyL').checked&&!document.getElementById('ns_copyR').checked){
         fail('Tick laser and/or recipe to copy from '+sampleFullName(src)+', or set "Copy parameters from" back to empty.');
