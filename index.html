@@ -495,6 +495,10 @@
   .pres tr.wknd td.pres-in{background:#f6f7f9}
   .pres tr.wknd .pres-day{background:#eceef2}
   .pres tr.today .pres-day{box-shadow:inset 3px 0 0 var(--acc)}
+  .pres tr.pres-fold td{background:var(--panel2);padding:0;height:auto;border-right:none}
+  .foldbtn{width:100%;background:transparent;color:var(--acc);font-size:12px;font-weight:700;
+    padding:8px 12px;text-align:left}
+  .foldbtn:hover{background:#eef3fe}
   .pres tr.hol .pres-day{background:#fdeceb}
   .pres tr.hol .pres-day em{display:block;font-size:9px;color:#b42318;font-style:normal;letter-spacing:.3px;white-space:nowrap}
   .pres-legend .pres-hol{background:#fdeceb;border-color:#f5b5b0}
@@ -640,7 +644,7 @@
 /* ============================================================
    CONFIG  —  EDIT THESE TWO VALUES (see instructions below)
    ============================================================ */
-const LABCORE_VERSION = '2026-11-04 f';   // bump on every release
+const LABCORE_VERSION = '2026-11-04 g';   // bump on every release
 /* The one LABCORE_DATA folder everyone uses. Paste its Drive folder ID here
    (from the folder's URL: drive.google.com/drive/folders/<THIS PART>).
    When set, LabCore never searches for or creates a folder — it uses this
@@ -2309,7 +2313,7 @@ function setPrnState(kind,text){
    The sheet can also be opened and edited directly in Drive.           */
 const ATT_NAME='Attendance';
 let attId=null, attMonth=(()=>{const d=new Date();return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0');})();
-let attPeople=[], attCells={}, attDirty={}, attSaveTimer=null, attPollTimer=null, attLoadedRev=null;
+let attPeople=[], attCells={}, attDirty={}, attSaveTimer=null, attPollTimer=null, attLoadedRev=null, attShowPast=false;
 
 /* ---- Lithuanian public holidays ---- */
 function ltEaster(y){
@@ -2374,15 +2378,49 @@ async function attWriteSkeleton(month){
   await gapi.client.sheets.spreadsheets.values.update({spreadsheetId:attId,
     range:`'${month}'!A1`,valueInputOption:'RAW',resource:{values:rows}});
 }
+/* The "People" tab is the one roster every month uses. */
+const ATT_ROSTER='People';
+let attRoster=[];
+async function attLoadRoster(){
+  const tabs=await attTabs();
+  if(!tabs.some(t=>t.title===ATT_ROSTER)){
+    await gapi.client.sheets.spreadsheets.batchUpdate({spreadsheetId:attId,
+      requests:[{addSheet:{properties:{title:ATT_ROSTER,index:0}}}]});
+    // seed it from project people + any names already in month tabs
+    const seed=new Map();
+    knownPeople().forEach(n=>seed.set(n.toLowerCase(),n));
+    for(const t of tabs){
+      if(!/^\d{4}-\d{2}$/.test(t.title))continue;
+      try{ const r=await gapi.client.sheets.spreadsheets.values.get({spreadsheetId:attId,range:`'${t.title}'!1:1`});
+        ((r.result.values||[])[0]||[]).slice(1).forEach(n=>{ if(n&&n.trim())seed.set(n.trim().toLowerCase(),n.trim()); }); }catch(e){}
+    }
+    attRoster=[...seed.values()].sort((a,b)=>a.localeCompare(b));
+    await gapi.client.sheets.spreadsheets.values.update({spreadsheetId:attId,
+      range:`'${ATT_ROSTER}'!A1`,valueInputOption:'RAW',resource:{values:[['Name'],...attRoster.map(n=>[n])]}});
+    return attRoster;
+  }
+  const r=await gapi.client.sheets.spreadsheets.values.get({spreadsheetId:attId,range:`'${ATT_ROSTER}'!A2:A200`});
+  const map=new Map();
+  (r.result.values||[]).forEach(row=>{ const n=(row[0]||'').trim(); if(n)map.set(n.toLowerCase(),n); });
+  knownPeople().forEach(n=>{ if(!map.has(n.toLowerCase()))map.set(n.toLowerCase(),n); });
+  attRoster=[...map.values()].sort((a,b)=>a.localeCompare(b));
+  // keep the tab in sync with project people added since
+  if((r.result.values||[]).length!==attRoster.length){
+    await gapi.client.sheets.spreadsheets.values.clear({spreadsheetId:attId,range:`'${ATT_ROSTER}'!A2:A200`});
+    await gapi.client.sheets.spreadsheets.values.update({spreadsheetId:attId,
+      range:`'${ATT_ROSTER}'!A2`,valueInputOption:'RAW',resource:{values:attRoster.map(n=>[n])}});
+  }
+  return attRoster;
+}
 function attPeopleUnion(fromSheet){
   const map=new Map();
-  (fromSheet||[]).forEach(n=>{ if(n&&n.trim())map.set(n.trim().toLowerCase(),n.trim()); });
-  knownPeople().forEach(n=>{ if(!map.has(n.toLowerCase()))map.set(n.toLowerCase(),n); });
+  attRoster.forEach(n=>map.set(n.toLowerCase(),n));
+  (fromSheet||[]).forEach(n=>{ if(n&&n.trim()&&!map.has(n.trim().toLowerCase()))map.set(n.trim().toLowerCase(),n.trim()); });
   return [...map.values()].sort((a,b)=>a.localeCompare(b));
 }
 /* read one month tab into attPeople / attCells */
 async function attLoad(month){
-  await attEnsureSheet(); await attEnsureTab(month);
+  await attEnsureSheet(); await attLoadRoster(); await attEnsureTab(month);
   const r=await gapi.client.sheets.spreadsheets.values.get({spreadsheetId:attId,range:`'${month}'!A1:ZZ40`});
   const vals=r.result.values||[];
   const header=vals[0]||['Day'];
@@ -2444,7 +2482,7 @@ function setAttState(kind,text){
 }
 function attMonthLabel(m){ const [y,mo]=m.split('-').map(Number); return new Date(y,mo-1,1).toLocaleDateString(undefined,{month:'long',year:'numeric'}); }
 function attShift(delta){ const [y,mo]=attMonth.split('-').map(Number); const d=new Date(y,mo-1+delta,1);
-  attMonth=d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0'); renderPresence(); }
+  attMonth=d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0'); attShowPast=false; renderPresence(); }
 function attKind(v){ v=String(v||'').trim(); if(!v)return 'in'; if(/^0+$/.test(v)||/^(ne|no|out|off|-)$/i.test(v))return 'out'; return 'part'; }
 
 async function renderPresence(){
@@ -2476,10 +2514,18 @@ async function renderPresence(){
   const [y,mo]=attMonth.split('-').map(Number), days=attDaysIn(attMonth), hol=ltHolidays(y);
   const dow=['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
   const today=(()=>{const d=new Date();return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');})();
-  let rows='';
+  // Start of the current week (Monday). Days before it, in the current month,
+  // are folded away behind a toggle so the sheet opens on what matters now.
+  const nowD=new Date(); const mondayOff=(nowD.getDay()+6)%7;
+  const weekStart=new Date(nowD.getFullYear(),nowD.getMonth(),nowD.getDate()-mondayOff);
+  const curMonth=nowD.getFullYear()+'-'+String(nowD.getMonth()+1).padStart(2,'0');
+  const isCurMonth=(attMonth===curMonth);
+  let rows='', hidden=0;
   for(let d=1;d<=days;d++){
     const ds=attMonth+'-'+String(d).padStart(2,'0'), wd=new Date(y,mo-1,d).getDay();
     const isHol=hol.has(ds), hname=LT_HOLIDAY_NAMES[ds.slice(5)]||(isHol?'Public holiday':'');
+    const past=isCurMonth&&!attShowPast&&(new Date(y,mo-1,d)<weekStart);
+    if(past){hidden++;continue;}
     rows+=`<tr class="${(wd===0||wd===6)?'wknd':''}${ds===today?' today':''}${isHol?' hol':''}">
       <th class="pres-day" title="${esc(hname)}"><b>${d}</b><span>${dow[wd]}</span>${isHol?'<em>'+esc(hname)+'</em>':''}</th>`+
       attPeople.map(p=>{ const k=ds+'|'+p.toLowerCase(), v=attCells[k]||'';
@@ -2507,7 +2553,11 @@ async function renderPresence(){
     </div>
     <div class="pres-wrap"><table class="pres">
       <thead><tr><th class="pres-corner"></th>${attPeople.map(n=>`<th title="${esc(n)}">${esc(n)}</th>`).join('')}</tr></thead>
-      <tbody>${rows}</tbody></table></div>
+      <tbody>${hidden?`<tr class="pres-fold"><td colspan="${attPeople.length+1}">
+          <button class="foldbtn" onclick="attShowPast=true;renderPresence()">▸ Show ${hidden} earlier day${hidden===1?'':'s'} of this month</button></td></tr>`:''}
+        ${(isCurMonth&&attShowPast)?`<tr class="pres-fold"><td colspan="${attPeople.length+1}">
+          <button class="foldbtn" onclick="attShowPast=false;renderPresence()">▾ Hide days before this week</button></td></tr>`:''}
+        ${rows}</tbody></table></div>
     ${attPeople.length?'':'<div class="empty-note" style="margin-top:12px">No people yet — they appear from projects automatically, or add one with “+ Person”.</div>'}`;
   setAttState('ok','Up to date');
   document.querySelectorAll('.pres input').forEach(inp=>{
@@ -2532,14 +2582,14 @@ async function renderPresence(){
   },20000);
 }
 async function attAddPerson(){
-  const name=prompt('Name to add to the sheet:'); if(!name||!name.trim())return;
+  const name=prompt('Name to add (goes into every month):'); if(!name||!name.trim())return;
   const n=name.trim();
-  if(attPeople.some(x=>x.toLowerCase()===n.toLowerCase())){toast('Already on the sheet',true);return;}
+  if(attRoster.some(x=>x.toLowerCase()===n.toLowerCase())){toast('Already on the sheet',true);return;}
   setAttState('busy','Saving…');
   try{
-    await gapi.client.sheets.spreadsheets.values.update({spreadsheetId:attId,
-      range:`'${attMonth}'!${attCol(attPeople.length+1)}1`,valueInputOption:'RAW',resource:{values:[[n]]}});
-    renderPresence();
+    await gapi.client.sheets.spreadsheets.values.append({spreadsheetId:attId,
+      range:`'${ATT_ROSTER}'!A:A`,valueInputOption:'RAW',insertDataOption:'INSERT_ROWS',resource:{values:[[n]]}});
+    renderPresence();           // attLoad re-reads the roster and adds the column
   }catch(e){ setAttState('err','Save failed'); toast('Could not add: '+(e.message||e),true); }
 }
 
